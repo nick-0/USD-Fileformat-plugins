@@ -1,3 +1,10 @@
+[![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/windows-2022-2405-ALL.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/windows-2022-2311-ALL.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/windows-2022-2308-ALL.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml)
+
+[![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/macOS-14-2405-ALL.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/macOS-13-2405-ALL.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/macOS-13-2311-ALL.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/macOS-13-2308-ALL.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml)
+
+[![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/ubuntu-22.04-2405-ALL.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/ubuntu-22.04-2311-ALL.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/ubuntu-22.04-2308-ALL.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml)
+
+
 # USD File Format Plugins
 These [USD file-format-plugins](https://graphics.pixar.com/usd/release/plugins.html) allow the interchange between [Pixar's USD](https://graphics.pixar.com/usd/release/index.html) (`.usd`, `.usda`, `.usdz`) and the following file formats, with cross platform support (`windows`, `macos`, and `linux`):
 
@@ -22,7 +29,7 @@ These [USD file-format-plugins](https://graphics.pixar.com/usd/release/plugins.h
 
 ## Dependencies
 The following tools are needed:
-- C/C++ compiler ([MSVC 19](https://visualstudio.microsoft.com/vs/), [GCC](https://gcc.gnu.org/), [Clang](https://releases.llvm.org/download.html), [Xcode](https://developer.apple.com/xcode/))
+- C/C++ compiler ([MSVC 19/22](https://visualstudio.microsoft.com/vs/), [GCC](https://gcc.gnu.org/), [Clang](https://releases.llvm.org/download.html), [Xcode](https://developer.apple.com/xcode/))
 - [clang-format 16.0.0](https://releases.llvm.org/download.html)
 - [Python 3.10](https://www.python.org/)
 - [CMake 3.24](https://cmake.org/)
@@ -34,7 +41,7 @@ The following dependencies are needed:
 |--|--|--|--|
 | [Pixar USD](https://github.com/PixarAnimationStudios/USD)         | 23.08       | all       | no  |
 | [GTest](https://github.com/google/googletest.git)                 | 1.11.0      | all tests | yes |
-| [FBX SDK](https://aps.autodesk.com/developer/overview/fbx-sdk)    | 2020.2.1    | usdfbx    | no  |
+| [FBX SDK](https://aps.autodesk.com/developer/overview/fbx-sdk)    | 2020.3.7    | usdfbx    | no  |
 | [LibXml2](https://gitlab.gnome.org/GNOME/libxml2)                 | 2.10.0      | usdfbx    | no  |
 | [Zlib](https://github.com/madler/zlib.git)                        | 1.2.11      | usdfbx    | no  |
 | [TinyGltf](https://github.com/syoyo/tinygltf)                     | 2.8.21      | usdgltf   | no  |
@@ -65,6 +72,7 @@ The following dependencies are needed:
     Setup USD environment variables:
     * `<USD_INSTALL_PATH>/bin` to `PATH`
     * `<USD_INSTALL_PATH>/lib` to `PATH` in windows, or to `LD_LIBRARY_PATH` in linux, mac
+    * `<USD_INSTALL_PATH>/lib64` to `LD_LIBRARY_PATH` in linux
     * `<USD_INSTALL_PATH>/lib/python` to `PYTHONPATH`
 
     In linux you may need these other dependencies:
@@ -119,6 +127,7 @@ where:
 | -DUSD_FILEFORMATS_ENABLE_OBJ | Enables obj plugin | ON | usdobj |
 | -DUSD_FILEFORMATS_ENABLE_PLY | Enables ply plugin | ON | usdply |
 | -DUSD_FILEFORMATS_ENABLE_STL | Enables stl plugin |  ON | usdstl |
+| -DUSD_FILEFORMATS_ENABLE_SBSAR | Enables sbsar plugin |  OFF | usdsbsar |
 | -DUSD_FILEFORMATS_ENABLE_DRACO | Enables draco in usdgltf | OFF | usdgltf |
 | -DUSD_FILEFORMATS_FORCE_FETCHCONTENT | Forces FetchContent for various packages | OFF | all |
 | -DUSD_FILEFORMATS_FETCH_GTEST | Forces FetchContent for GTest | ON | all tests |
@@ -193,6 +202,27 @@ Or Copy plugins:
   ```bash
   python ./USD-Fileformat-plugins/test/test.py --generate_baseline
   ```
+
+## CI Workflow
+Our GitHub Actions setup includes two main workflows to support continuous integration.
+
+### 1. CI Build Workflow
+This workflow is triggered by any push or pull request to the main branch and ensures compatibility with Universal Scene Description (USD) versions:
+- **Versions Tested:** Builds against the oldest (23.08) and newest (24.05) supported USD versions regularly.
+- **Weekly Builds:** The workflow builds against all supported USD versions to confirm ongoing compatibility.
+- **Post-Build Testing:** Following the build, each plugin undergoes sanity testing, including loading a cube to check basic functionality.
+- **Supported Plugins:** Currently supports FBXm GLTF, OBJ, PLY, and STL. Note: SBSAR plugin is not supported due to SDK constraints.
+  - Individual plugin build result badges are on their respective README pages.
+
+### 2. Create USD Release Workflow
+This manually triggered workflow involves the following steps:
+- **Build Specification:** Takes a specific USD version as input, builds USD with OpenImageIO, and then creates a release.
+- **Archiving:** Compiled USD builds are archived per platform and added as binary data to the release, which keeps the repository's clone size manageable.
+- **Environment Setup:** After downloading and expanding the release archive, users should configure their environment as follows:
+  - In the following steps `USD_DIR` is the directory where the release archive was expanded.
+  - Add `USD_DIR\lib` and `USD_DIR\bin` to your `PATH` in windows, or to `LD_LIBRARY_PATH` in linux, mac
+  - Set `PYTHONPATH` to `USD_DIR\lib\python`.
+  - Set `USD_BUILD_DIR` as `USD_DIR`.
 
 ## Usage
 USD will now be able to work with the supported files, for example:

@@ -15,7 +15,6 @@ governing permissions and limitations under the License.
 
 namespace adobe::usd {
 
-
 /// \ingroup usdply
 /// \brief Export USD data to a ply model.
 bool

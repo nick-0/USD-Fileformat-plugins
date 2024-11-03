@@ -21,6 +21,15 @@ struct ImportFbxOptions
     bool importMaterials = true;
     bool importImages = true;
     bool importPhong = false;
+    bool importAnimationStacks = false;
+    PXR_NS::TfToken originalColorSpace;
+};
+
+enum class FbxPropertyNumChannels
+{
+    One,
+    Two,
+    Three,
 };
 
 /// \ingroup usdfbx

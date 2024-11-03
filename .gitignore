@@ -45,14 +45,12 @@ build-meta
 
 # Generated documentation
 docs
-
-# Gemerated install
-bin
-
-# Generated testing
 Testing
+bin
+test/__pycache__
 test/output
-test/__pycache__/
-*_usdchecked.usd
-*_usdchecked.usda
-*_baseline_images.zip
+test/assets/fbx/*.usd
+test/assets/gltf/*.usd
+test/assets/obj/*/*.usd
+test/assets/ply/*.usd
+test/assets/stl/*.usd

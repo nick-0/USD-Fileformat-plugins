@@ -120,30 +120,53 @@ printFbx(Fbx& fbx)
             if (debugSkels) {
                 if (attrType == FbxNodeAttribute::eMesh) {
                     FbxMesh* fbxMesh = FbxCast<FbxMesh>(attribute);
-                    int deformerCount = fbxMesh->GetDeformerCount(FbxDeformer::eSkin);
-                    for (int i = 0; i < deformerCount; i++) {
-                        FbxSkin* skin =
-                          FbxCast<FbxSkin>(fbxMesh->GetDeformer(i, FbxDeformer::eSkin));
-                        msg += " skin [";
-                        for (int j = 0; j < skin->GetClusterCount(); j++) {
-                            FbxCluster* cluster = skin->GetCluster(j);
-                            FbxNode* link = cluster->GetLink();
-                            msg += " skel::" + std::string(link->GetName());
+                    if (fbxMesh != nullptr) {
+                        int deformerCount = fbxMesh->GetDeformerCount(FbxDeformer::eSkin);
+                        for (int j = 0; j < deformerCount; j++) {
+                            FbxSkin* skin =
+                              FbxCast<FbxSkin>(fbxMesh->GetDeformer(j, FbxDeformer::eSkin));
+                            if (skin != nullptr) {
+                                msg += " skin [";
+                                for (int k = 0; k < skin->GetClusterCount(); k++) {
+                                    FbxCluster* cluster = skin->GetCluster(k);
+                                    if (cluster != nullptr) {
+                                        FbxNode* link = cluster->GetLink();
+                                        if (link != nullptr) {
+                                            msg += " skel::" + std::string(link->GetName());
+                                        } else {
+                                            TF_WARN("Cluster link is nullptr");
+                                        }
+                                    } else {
+                                        TF_WARN("Failed to retrieve cluster from skin");
+                                    }
+                                }
+                                msg += "]";
+                            } else {
+                                TF_WARN("Failed to cast Deformer to FbxSkin");
+                            }
                         }
-                        msg += "]";
+                    } else {
+                        TF_WARN("Failed to cast FbxNodeAttribute to FbxMesh");
                     }
                 }
+                if (i < nodeAttrCount - 1) {
+                    msg += ", ";
+                }
             }
-            if (i < nodeAttrCount - 1) {
-                msg += ", ";
-            }
-        }
-        msg += " }";
-        TF_DEBUG_MSG(FILE_FORMAT_FBX, "%*s%s\n", indent, "   ", msg.c_str());
+            msg += " }";
+            TF_DEBUG_MSG(FILE_FORMAT_FBX, "%*s%s\n", indent, "   ", msg.c_str());
 
-        indent += indentSize;
-        for (int i = 0; i < node->GetChildCount(); i++) {
-            printNode(node->GetChild(i), indent);
+            indent += indentSize;
+            for (int j = 0; j < node->GetChildCount(); j++) {
+                FbxNode* childNode = node->GetChild(j);
+                if (childNode == nullptr) {
+                    TF_WARN("Child node at index %d is null for node '%s'. Skipping.",
+                            j,
+                            node->GetName());
+                    continue;
+                }
+                printNode(childNode, indent);
+            }
         }
     };
     printNode(fbx.scene->GetRootNode(), indentSize);
@@ -159,6 +182,10 @@ EmbedReadCBFunction(void* pUserData,
                     const void* pFileBuffer,
                     size_t pSizeInBytes)
 {
+    if (!pUserData || !pFileName || !pFileBuffer || pSizeInBytes < 1) {
+        return FbxCallback::State::eNotHandled;
+    }
+
     Fbx* fbx = reinterpret_cast<Fbx*>(pUserData);
     TF_DEBUG_MSG(FILE_FORMAT_FBX, "EmbedReadCBFunction: %s\n", pFileName);
 
@@ -185,10 +212,16 @@ bool
 readFbx(Fbx& fbx, const std::string& filename, bool onlyMaterials)
 {
     GUARD(fbx.manager != nullptr, "Invalid fbx manager");
+
     FbxImporter* importer = FbxImporter::Create(fbx.manager, IOSROOT);
-    FbxIOSettings* ios = FbxIOSettings::Create(fbx.manager, IOSROOT);
     GUARD(importer != nullptr, "Invalid fbx importer");
-    GUARD(ios != nullptr, "Invalid ios settings");
+
+    FbxIOSettings* ios = FbxIOSettings::Create(fbx.manager, IOSROOT);
+    if (!ios) {
+        TF_RUNTIME_ERROR(FILE_FORMAT_FBX, "Failed to create FbxIOSettings");
+        importer->Destroy();
+        return false;
+    }
 
     fbx.filename = filename;
     ios->SetBoolProp(IMP_FBX_MATERIAL, true);
@@ -196,22 +229,32 @@ readFbx(Fbx& fbx, const std::string& filename, bool onlyMaterials)
     ios->SetBoolProp(IMP_FBX_ANIMATION, !onlyMaterials);
     ios->SetBoolProp(IMP_FBX_MODEL, !onlyMaterials);
     fbx.loadImages = onlyMaterials;
+
     if (!importer->Initialize(filename.c_str(), -1, ios)) {
         FbxString error = importer->GetStatus().GetErrorString();
         TF_RUNTIME_ERROR(FILE_FORMAT_FBX,
-                         "Call to FbxExporter::Initialize() failed on opening file %s \n",
+                         "Call to FbxImporter::Initialize() failed on opening file %s \n",
                          filename.c_str());
         TF_RUNTIME_ERROR(FILE_FORMAT_FBX, "Error returned: %s\n\n", error.Buffer());
         importer->Destroy();
+        ios->Destroy();
         return false;
     }
+
     // let fbx own importer
     fbx.importer = importer;
 
     // Create the read callback to handle loading embedded data (ie images)
     FbxEmbeddedFileCallback* readCallback =
       FbxEmbeddedFileCallback::Create(fbx.manager, "EmbeddedFileReadCallback");
-    GUARD(readCallback != nullptr, "Invalid read callback");
+
+    if (!readCallback) {
+        TF_RUNTIME_ERROR(FILE_FORMAT_FBX, "Failed to create FbxEmbeddedFileCallback");
+        importer->Destroy();
+        ios->Destroy();
+        return false;
+    }
+
     readCallback->RegisterReadFunction(EmbedReadCBFunction, (void*)&fbx);
     importer->SetEmbeddedFileReadCallback(readCallback);
 
@@ -221,13 +264,48 @@ readFbx(Fbx& fbx, const std::string& filename, bool onlyMaterials)
     TF_DEBUG_MSG(FILE_FORMAT_FBX, "FBX importer opened file %s \n", filename.c_str());
     if (!importer->Import(fbx.scene)) {
         FbxString error = importer->GetStatus().GetErrorString();
-        TF_RUNTIME_ERROR("Call to FbxExporter::Import() failed.\n");
-        TF_RUNTIME_ERROR("Error returned: %s\n\n", error.Buffer());
+        TF_RUNTIME_ERROR(FILE_FORMAT_FBX, "Call to FbxImporter::Import() failed.\n");
+        TF_RUNTIME_ERROR(FILE_FORMAT_FBX, "Error returned: %s\n\n", error.Buffer());
         return false;
     }
+
     TF_DEBUG_MSG(FILE_FORMAT_FBX, "FBX read success \n");
     printFbx(fbx);
     return true;
+}
+
+std::string
+extractFileName(const char* pFileName)
+{
+    std::string fileName(pFileName);
+    std::replace(fileName.begin(),
+                 fileName.end(),
+                 '\\',
+                 '/'); // Normalize slashes for cross-platform consistency
+    size_t lastSlash = fileName.find_last_of('/');
+    if (lastSlash != std::string::npos) {
+        fileName = fileName.substr(lastSlash + 1);
+    }
+    return fileName;
+}
+
+bool
+populateFileBufferAndSize(Fbx* fbx,
+                          const char* pFileName,
+                          const void**& pFileBuffer,
+                          size_t*& pSizeInBytes)
+{
+    for (const ImageAsset& image : fbx->images) {
+        if (image.uri == pFileName) {
+            *pFileBuffer = image.image.data();
+            *pSizeInBytes = image.image.size();
+            if (pFileBuffer && *pSizeInBytes > 0) {
+                return true;
+            }
+            break;
+        }
+    }
+    return false;
 }
 
 FbxCallback::State
@@ -237,12 +315,19 @@ EmbedWriteCBFunction(void* pUserData,
                      const void** pFileBuffer,
                      size_t* pSizeInBytes)
 {
+    if (!pUserData || !pFileName) {
+        return FbxCallback::State::eNotHandled;
+    }
+
     Fbx* fbx = reinterpret_cast<Fbx*>(pUserData);
     TF_DEBUG_MSG(FILE_FORMAT_FBX, "EmbedWriteCBFunction: %s\n", pFileName);
-    for (const ImageAsset& image : fbx->images) {
-        if (image.uri == pFileName) {
-            *pFileBuffer = image.image.data();
-            *pSizeInBytes = image.image.size();
+    if (populateFileBufferAndSize(fbx, pFileName, pFileBuffer, pSizeInBytes)) {
+        return FbxCallback::State::eHandled;
+    } else {
+        // Embedded pFilename's do not have the exportParentPath or a filepath, so we need to
+        // extract the file name
+        std::string fileName = extractFileName(pFileName);
+        if (populateFileBufferAndSize(fbx, fileName.c_str(), pFileBuffer, pSizeInBytes)) {
             return FbxCallback::State::eHandled;
         }
     }
@@ -262,7 +347,11 @@ writeFbx(const ExportFbxOptions& options, const Fbx& fbx, const std::string& fil
     FbxIOSettings* ios = FbxIOSettings::Create(fbx.manager, IOSROOT);
 
     GUARD(exporter != nullptr, "Invalid fbx exporter");
-    GUARD(ios != nullptr, "Invalid ios settings");
+    if (!ios) {
+        TF_RUNTIME_ERROR(FILE_FORMAT_FBX, "Failed to create FbxIOSettings");
+        exporter->Destroy();
+        return false;
+    }
     ios->SetBoolProp(EXP_FBX_MATERIAL, true);
     ios->SetBoolProp(EXP_FBX_TEXTURE, true);
     ios->SetBoolProp(EXP_FBX_ANIMATION, true);
@@ -296,10 +385,16 @@ writeFbx(const ExportFbxOptions& options, const Fbx& fbx, const std::string& fil
         writeCallback->RegisterWriteFunction(EmbedWriteCBFunction, (void*)&fbx);
         exporter->SetEmbeddedFileWriteCallback(writeCallback);
         exportResult = exporter->Export(fbx.scene);
+        if (!exportResult) {
+            FbxString error = exporter->GetStatus().GetErrorString();
+            TF_RUNTIME_ERROR(FILE_FORMAT_FBX, "Call to FbxExporter::Export() failed.\n");
+            TF_RUNTIME_ERROR(FILE_FORMAT_FBX, "Error returned: %s\n\n", error.Buffer());
+        }
         writeCallback->Destroy();
     }
 
     exporter->Destroy();
+    ios->Destroy();
     return exportResult;
 }
 

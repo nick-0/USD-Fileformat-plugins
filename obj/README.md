@@ -1,5 +1,11 @@
 # USDOBJ
 
+[![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/windows-2022-2405-OBJ.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/windows-2022-2311-OBJ.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/windows-2022-2308-OBJ.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml)
+
+[![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/macOS-14-2405-OBJ.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/macOS-13-2405-OBJ.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/macOS-13-2311-OBJ.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/macOS-13-2308-OBJ.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml)
+
+[![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/ubuntu-22.04-2405-OBJ.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/ubuntu-22.04-2311-OBJ.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml) [![](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/kwblackstone/264643f3d2acacc5369a0ba70854dfb6/raw/ubuntu-22.04-2308-OBJ.json)](https://github.com/adobe/USD-Fileformat-plugins/actions/workflows/ci.yml)
+
 ## Supported features
 
 |Feature|Import|Export|
@@ -42,12 +48,38 @@ The generated USD will keep default units and up axis (1cm, +y).
 
 Allows importing obj from ZBrush with vertex color (#MRGB tag)
 
+* `objOriginalColorSpace`: USD uses linear colorspace, however, OBJ colorspace could be either linear or sRGB.
+    The user can set which one the data was in during import.  If the data is in sRGB it will be converted to linear while in USD. Exporting will also consider the original color space. See Export -> outputColorSpace for details.
+
+    ```
+    UsdStageRefPtr stage = UsdStage::Open("cube.obj:SDF_FORMAT_ARGS:objOriginalColorSpace=sRGB")
+    ```
+
 **Export:**
 
 Meshes distributed in the node hierarchy in USD will be transformed by their global transform 
 during the export, since obj does not support nodes.
-Also, the resulting meshes will have units = 1m and up axis = +y.
+Also, the resulting meshes are unitless (obj does not support units). No adjustments will be applied to the scale based on the input usd units. This is because obj readers in the industry make different assumptions on the units.
 
+* `outputColorSpace`: USD uses linear colorspace, however, the original OBJ colorspace could be either linear or sRGB.
+    If objOriginalColorSpace was set the fileformat plugin will use it when exporting unless outputColorSpace is specified.
+
+    Order or precendence on export (Note: the plugin assumes usd data is linear)
+    1. If outputColorSpace=linear, the usd color data is exported as is.
+    2. If outputColorSpace=sRGB, the usd color data is converted to sRGB on export
+    3. If outputColorSpace is not set and objOriginalColorSpace is known, it will export the color data in the original format
+    4. If outputColorSpace is not set and objOriginalColorSpace is not known, it will export the color data as is.
+
+    Example:
+    ```
+    UsdStageRefPtr stage = UsdStage::Open("cube.obj:SDF_FORMAT_ARGS:objOriginalColorSpace=sRGB")
+
+    # round trip the asset using the original colorspace
+    stage.Export("round_trip_original_cube_srgb.obj")  // exported file will have sRGB colorspace
+
+    # round trip the asset overriding the original colorspace
+    stage.Export("round_trip_original_cube_linear.obj:SDF_FORMAT_ARGS:outputColorSpace=linear")  // exported file will have linear colorspace
+    ```
 
 ## File Format Arguments
 

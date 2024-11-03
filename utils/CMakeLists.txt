@@ -3,7 +3,10 @@ if (NOT TARGET usd)
     find_package(pxr REQUIRED)
 endif()
 find_package(OpenImageIO REQUIRED)
-find_package(GTest REQUIRED)
+find_package(ZLIB REQUIRED)
+if(USD_FILEFORMATS_BUILD_TESTS)
+    find_package(GTest REQUIRED)
+endif()
 
 add_library(fileformatUtils SHARED)
 target_compile_definitions(fileformatUtils PRIVATE USDFFUTILS_EXPORTS)
@@ -37,19 +40,23 @@ PRIVATE
     "layerWriteSdfData.cpp"
     "materials.h"
     "materials.cpp"
+    "neuralAssetsHelper.h"
+    "neuralAssetsHelper.cpp"
     "resolver.h"
     "resolver.cpp"
     "sdfMaterialUtils.h"
     "sdfMaterialUtils.cpp"
     "sdfUtils.h"
     "sdfUtils.cpp"
-    "test.h"
-    "test.cpp"
     "usdData.h"
     "usdData.cpp"
 )
 
-target_include_directories(fileformatUtils INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(fileformatUtils
+    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}
+    PRIVATE "${PROJECT_BINARY_DIR}"
+)
+
 target_link_libraries(fileformatUtils
 PUBLIC
     OpenImageIO::OpenImageIO
@@ -57,12 +64,26 @@ PUBLIC
     sdf
     usd
     usdGeom
+    usdLux
+    usdRender
     usdSkel
     usdShade
     usdUtils
     usdVol
     arch
-    GTest::gtest # should separate usdutils-runtime part and usdutils-test part
+    ZLIB::ZLIB
 )
+
+if(USD_FILEFORMATS_BUILD_TESTS)
+    target_sources(fileformatUtils
+        PRIVATE
+            "test.h"
+            "test.cpp"
+    )
+    target_link_libraries(fileformatUtils
+        PUBLIC
+            GTest::gtest # should separate usdutils-runtime part and usdutils-test part
+    )
+endif()
 
 install(TARGETS fileformatUtils)

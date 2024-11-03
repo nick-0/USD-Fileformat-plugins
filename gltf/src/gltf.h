@@ -15,15 +15,29 @@ governing permissions and limitations under the License.
 
 namespace adobe::usd {
 
+// Scale between intensity of USD lights and GLTF lights
+const float GLTF_TO_USD_INTENSITY_SCALE_FACTOR = 100.0;
+
+// lights are by default given a diameter of 1, since there is no concept of light radius in glTF
+const float DEFAULT_LIGHT_RADIUS = 0.5;
+
+// max color value of a pixel
+const float MAX_COLOR_VALUE = 255.0f;
+
 struct WriteGltfOptions
 {
     bool embedImages = true;
 };
 
+const tinygltf::Image*
+getImage(const tinygltf::Model* model, size_t textureIndex);
+
 bool
-readGltf(tinygltf::Model& gltf, const std::string& filename);
-bool
-readGltf(tinygltf::Model& gltf, std::string& str);
+readGltfFromMemory(tinygltf::Model& gltf,
+                   const std::string& baseDir,
+                   bool isAscii,
+                   const char* buffer,
+                   size_t bufferSize);
 bool
 writeGltf(const WriteGltfOptions& options, tinygltf::Model& gltf, const std::string& filename);
 
@@ -120,4 +134,8 @@ packBase64String(const std::uint8_t* inputData,
                  std::size_t inLen,
                  bool compressed,
                  std::string& b64Str);
+
+float
+sampleBilinear(const tinygltf::Image* image, float ncx, float ncy, int channel);
+
 }

@@ -33,6 +33,14 @@ governing permissions and limitations under the License.
     (clamp) \
     (wrapS) \
     (wrapT) \
+    (magFilter) \
+    (minFilter) \
+    (linear) \
+    (nearest) \
+    (linearMipmapLinear) \
+    (linearMipmapNearest) \
+    (nearestMipmapNearest) \
+    (nearestMipmapLinear) \
     (mirror) \
     (black) \
     (useMetadata) \
@@ -49,6 +57,7 @@ governing permissions and limitations under the License.
     (rotation) \
     (translation) \
     (normals) \
+    (normalScale) \
     (tangents) \
     (varname) \
     (UsdUVTexture) \
@@ -66,12 +75,18 @@ governing permissions and limitations under the License.
     (metallic) \
     (roughness) \
     (clearcoat) \
+    (clearcoatColor) \
+    (clearcoatIor) \
+    (clearcoatNormal) \
     (clearcoatRoughness) \
+    (clearcoatSpecular) \
     (sheenOpacity) \
     (sheenColor) \
     (sheenRoughness) \
     (anisotropyLevel) \
+    (anisotropyLevelTexture) \
     (anisotropyAngle) \
+    (anisotropyAngleTexture) \
     (opacity) \
     (opacityThreshold) \
     (displacement) \
@@ -83,10 +98,13 @@ governing permissions and limitations under the License.
     (specularEdgeColor) \
     (specularLevel) \
     (height) \
+    (heightLevel) \
+    (heightScale) \
     (emissiveIntensity) \
     (emissive) \
     (translucency) \
     (IOR) \
+    (dispersion) \
     (absorptionColor) \
     (absorptionDistance) \
     (scatter) \
@@ -101,7 +119,13 @@ governing permissions and limitations under the License.
     (ambientOcclusion) \
     (volumeThickness) \
     (clearcoatModelsTransmissionTint) \
+    (unlit) \
     (writeMaterialX) \
+    (transmission) \
+    (subsurfaceWeight) \
+    (min) \
+    (max) \
+    (originalColorSpace)
 // clang-format on
 
 /// Tokens for MaterialX nodes
@@ -199,11 +223,78 @@ governing permissions and limitations under the License.
     (hashGridResolution)
 // clang-format on
 
+/// Tokens for the inputs of Gaussian splats
+/// These tokens are copied from the .PLY version of Gaussian splat,
+/// which are defined in the original Gsplat codebase. Refer to:
+/// https://github.com/graphdeco-inria/gaussian-splatting/blob/main/scene/gaussian_model.py
+/// for more details.
+///
+/// rot: Rotation of the splat, in the form of a quaternion.
+/// widths*: Additional scales of the splat in Y- and Z- axis, in the object space
+/// fRest*: 1st and above (up to 3rd) orders of spherical harmonics coefficients.
+///         There are 15 coefficients each of which is a 3D vector, and thus we
+///         have 45 floats.
+// clang-format off
+#define ADOBE_GSPLAT_BASE_TOKENS \
+    (rot) \
+    (widths1) \
+    (widths2)
+
+#define ADOBE_GSPLAT_SH_TOKENS \
+    (fRest0) \
+    (fRest1) \
+    (fRest2) \
+    (fRest3) \
+    (fRest4) \
+    (fRest5) \
+    (fRest6) \
+    (fRest7) \
+    (fRest8) \
+    (fRest9) \
+    (fRest10) \
+    (fRest11) \
+    (fRest12) \
+    (fRest13) \
+    (fRest14) \
+    (fRest15) \
+    (fRest16) \
+    (fRest17) \
+    (fRest18) \
+    (fRest19) \
+    (fRest20) \
+    (fRest21) \
+    (fRest22) \
+    (fRest23) \
+    (fRest24) \
+    (fRest25) \
+    (fRest26) \
+    (fRest27) \
+    (fRest28) \
+    (fRest29) \
+    (fRest30) \
+    (fRest31) \
+    (fRest32) \
+    (fRest33) \
+    (fRest34) \
+    (fRest35) \
+    (fRest36) \
+    (fRest37) \
+    (fRest38) \
+    (fRest39) \
+    (fRest40) \
+    (fRest41) \
+    (fRest42) \
+    (fRest43) \
+    (fRest44)
+// clang-format on
+
 PXR_NAMESPACE_OPEN_SCOPE
 TF_DECLARE_PUBLIC_TOKENS(AdobeTokens, USDFFUTILS_API, ADOBE_TOKENS);
 TF_DECLARE_PUBLIC_TOKENS(MtlXTokens, USDFFUTILS_API, MATERIAL_X_TOKENS);
 TF_DECLARE_PUBLIC_TOKENS(OpenPbrTokens, USDFFUTILS_API, OPEN_PBR_TOKENS);
 TF_DECLARE_PUBLIC_TOKENS(AdobeNgpTokens, USDFFUTILS_API, ADOBE_NGP_TOKENS);
+TF_DECLARE_PUBLIC_TOKENS(AdobeGsplatBaseTokens, USDFFUTILS_API, ADOBE_GSPLAT_BASE_TOKENS);
+TF_DECLARE_PUBLIC_TOKENS(AdobeGsplatSHTokens, USDFFUTILS_API, ADOBE_GSPLAT_SH_TOKENS);
 PXR_NAMESPACE_CLOSE_SCOPE
 
 #define VOID_GUARD(x, ...)                                                                         \
@@ -252,6 +343,12 @@ argReadString(const PXR_NS::SdfFileFormat::FileFormatArguments& args,
               const std::string& debugTag);
 
 void USDFFUTILS_API
+argReadString(const PXR_NS::SdfFileFormat::FileFormatArguments& args,
+              const std::string& arg,
+              PXR_NS::TfToken& target,
+              const std::string& debugTag);
+
+void USDFFUTILS_API
 argReadBool(const PXR_NS::SdfFileFormat::FileFormatArguments& args,
             const std::string& arg,
             bool& target,
@@ -263,4 +360,31 @@ argReadFloat(const PXR_NS::SdfFileFormat::FileFormatArguments& args,
              float& target,
              const std::string& debugTag);
 
+std::string USDFFUTILS_API
+getFileExtension(const std::string& filePath, const std::string& defaultValue);
+
+std::string USDFFUTILS_API
+getCurrentDate();
+
+inline void USDFFUTILS_API
+ltrim(std::string& s)
+{
+    s.erase(s.begin(),
+            std::find_if(s.begin(), s.end(), [](unsigned char ch) { return !std::isspace(ch); }));
+}
+
+inline void USDFFUTILS_API
+rtrim(std::string& s)
+{
+    s.erase(
+      std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(),
+      s.end());
+}
+
+inline void USDFFUTILS_API
+trim(std::string& s)
+{
+    rtrim(s);
+    ltrim(s);
+}
 }

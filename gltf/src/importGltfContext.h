@@ -17,12 +17,16 @@ governing permissions and limitations under the License.
 
 namespace adobe::usd {
 
+struct ImportGltfOptions;
+
 struct ImportGltfContext
 {
-    const tinygltf::Model* gltf;
-    UsdData* usd;
+    const ImportGltfOptions* options = nullptr;
+    const tinygltf::Model* gltf = nullptr;
+    UsdData* usd = nullptr;
     std::string path;
     std::vector<int> nodeMap;
+    std::vector<int> parentMap;
     std::vector<std::string> skeletonNodeNames;
     std::vector<std::vector<int>> meshes;
 
@@ -31,6 +35,9 @@ struct ImportGltfContext
 
     // Caches the mapping from a GLTF texture index to the corresponding UsdImageIndex
     std::unordered_map<int, int> imageMap;
+
+    // name uniqueness enforcer for image names
+    UniqueNameEnforcer uniqueImageNameEnforcer;
 };
 
 } // end namespace adobe::usd

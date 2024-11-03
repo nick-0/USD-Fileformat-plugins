@@ -11,6 +11,9 @@ governing permissions and limitations under the License.
 */
 #include "sdfUtils.h"
 
+#include "common.h"
+#include "debugCodes.h"
+
 #include <pxr/usd/sdf/payload.h>
 #include <pxr/usd/sdf/reference.h>
 #include <pxr/usd/sdf/schema.h>
@@ -149,6 +152,13 @@ addPrimReference(SdfAbstractData* data, const SdfPath& primPath, const SdfRefere
 }
 
 void
+addPrimInherit(SdfAbstractData* data, const SdfPath& primPath, const SdfPath& inheritPath)
+{
+    assert(primPath.IsPrimOrPrimVariantSelectionPath());
+    _prependListOp(data, primPath, SdfFieldKeys->InheritPaths, inheritPath);
+}
+
+void
 addPrimPayload(SdfAbstractData* data, const SdfPath& primPath, const SdfPayload& payload)
 {
     // Note, we do create payload arcs on variant selection specs
@@ -205,9 +215,7 @@ setAttributeMetadata(SdfAbstractData* data,
 }
 
 void
-setAttributeDefaultValue(SdfAbstractData* data,
-                         const PXR_NS::SdfPath& propertyPath,
-                         const PXR_NS::VtValue& value)
+setAttributeDefaultValue(SdfAbstractData* data, const SdfPath& propertyPath, const VtValue& value)
 {
     assert(propertyPath.IsPropertyPath());
     data->Set(propertyPath, SdfFieldKeys->Default, value);

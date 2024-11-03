@@ -8,9 +8,14 @@ target_sources(${PLUGIN_NAME}
     PRIVATE
     assetPath/assetPathParser.cpp
 
+    assetResolver/sbsarAsset.cpp
     assetResolver/sbsarImage.cpp
     assetResolver/sbsarPackageResolver.cpp
     assetResolver/sbsarResolverCache.cpp
+
+    config/sbsarConfig.cpp
+    config/sbsarConfigFactory.cpp
+    config/sbsarConfigRegistry.cpp
 
     sbsarEngine/sbsarEngine.cpp
     sbsarEngine/sbsarPackageCache.cpp
@@ -93,6 +98,7 @@ endif(USDSBSAR_ENGINE_DLL_SUFFIX)
 # set compile flags
 list(APPEND flags "${_PXR_CXX_FLAGS}")
 
+usd_plugin_compile_config(usdSbsar)
 if(WIN32)
   # Silence USD warnings
   list(APPEND flags "/wd4244" "/wd4305" "/wd4267")
@@ -103,22 +109,6 @@ endif(WIN32)
 if(USDSBSAR_ENABLE_FIX_STORM_16BIT)
   target_compile_definitions(${PLUGIN_NAME} PRIVATE FIX_STORM_16BIT)
 endif()
-
-# enable ASM
-if(USDSBSAR_ENABLE_ASM)
-  message("[usd-fileformat/sbsar] Building with ASM")
-  target_compile_definitions(${PLUGIN_NAME} PUBLIC USDSBSAR_ENABLE_ASM)
-else(USDSBSAR_ENABLE_ASM)
-  message("[usd-fileformat/sbsar] Building without ASM")
-endif(USDSBSAR_ENABLE_ASM)
-
-# enable UsdPreviewSurface
-if(USDSBSAR_ENABLE_USDPREVIEWSURFACE)
-  message("[usd-fileformat/sbsar] Building with UsdPreviewSurface")
-  target_compile_definitions(${PLUGIN_NAME} PUBLIC USDSBSAR_ENABLE_USDPREVIEWSURFACE)
-else(USDSBSAR_ENABLE_USDPREVIEWSURFACE)
-  message("[usd-fileformat/sbsar] Building without UsdPreviewSurface")
-endif(USDSBSAR_ENABLE_USDPREVIEWSURFACE)
 
 # enable texture transform
 if(USDSBSAR_ENABLE_TEXTURE_TRANSFORM)

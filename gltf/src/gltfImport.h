@@ -11,6 +11,7 @@ governing permissions and limitations under the License.
 */
 #pragma once
 #include "gltf.h"
+#include "importGltfContext.h"
 #include <tiny_gltf.h>
 #include <usdData.h>
 
@@ -24,20 +25,69 @@ struct ImportGltfOptions
 };
 
 /// \ingroup usdgltf
+/// \brief search for key in cache. The keys are the texture names and values are the image indexes
+int
+lookupTexture(const std::unordered_map<std::string, int>& cache, const std::string& key);
+
+/// \ingroup usdgltf
+/// \brief read a double value from a gltf value
+bool
+readDoubleValue(const tinygltf::Value& val, double& value);
+
+/// \ingroup usdgltf
+/// \brief read texture data from a gltf value
+bool
+readTextureInfo(const tinygltf::Value& val, tinygltf::TextureInfo& textureInfo);
+
+/// \ingroup usdgltf
+/// \brief read a transform of a gltf texture
+bool
+importTextureTransform(const tinygltf::ExtensionMap& extensions, Input& input);
+
+/// \ingroup usdgltf
 /// \brief Import glTF data into a USD data cache.
 /// Imported metersPerUnits will be = 1, and upAxis = +y, as is the norm for all glTF.
 ///
-/// TODO refactor Skeleton import. Currently doing:
-/// 1. Import all glTF nodes, whether joint or not, as Xforms in the USD prim hierarchy.
-/// 2. Also import glTF joints into the joints attribute in USD skeletons.
-/// 3. XForms acting as root joints housing the hierarchy from (1) and UsdSkelRoot prims housing a
-///    skeleton from (2), are authored as siblings, so as to prevent the (root joint) XForm's
-///    transform to take effect 2 times.
-///
-/// Instead we should identify complete isolated skeleton joint hierarchies
-/// in the glTF node hierarchy (so no embedded skeletons), then create USD skeletons from this.
-/// Then associate glTF skin objects to USD SkelBindings.
+/// All gltf nodes are imported as Xforms in the USD hierarchy.
+/// Gltf skins are imported as Skeletons in USD with joints, bindTransforms and restTransforms.
+/// For nodes with a mesh and skin we position the mesh under the root joint of the associated
+/// skeleton.
 bool
-importGltf(const ImportGltfOptions& options, tinygltf::Model& model, UsdData& usd, const std::string& filename);
+importGltf(const ImportGltfOptions& options,
+           tinygltf::Model& model,
+           UsdData& usd,
+           const std::string& filename);
+
+/// \ingroup usdgltf
+/// \brief setup an image input for a texture
+void
+setInputImage(Input& input,
+              int imageIndex,
+              int uvIndex,
+              const PXR_NS::TfToken& channel,
+              const PXR_NS::TfToken& colorspace);
+
+/// \ingroup usdgltf
+/// \brief import a gltf image into the USD data cache
+int
+importImage(ImportGltfContext& ctx,
+            int textureIndex,
+            const std::string& materialName,
+            const std::string& imageName);
+
+bool
+importTexture(const tinygltf::Model* gltf,
+              int imageIndex,
+              int textureIndex,
+              int uvIndex,
+              Input& input,
+              const PXR_NS::TfToken& channel,
+              const PXR_NS::TfToken& colorSpace);
+
+void
+importScale1(Input& input, double factor);
+
+void
+importValue1(Input& input, double value);
 
 }

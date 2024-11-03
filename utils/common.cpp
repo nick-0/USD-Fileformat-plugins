@@ -11,12 +11,22 @@ governing permissions and limitations under the License.
 */
 #include "common.h"
 #include "debugCodes.h"
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <iomanip>
+#include <iostream>
+#include <locale>
+#include <sstream>
+#include <string>
 
 PXR_NAMESPACE_OPEN_SCOPE
 TF_DEFINE_PUBLIC_TOKENS(AdobeTokens, ADOBE_TOKENS);
 TF_DEFINE_PUBLIC_TOKENS(MtlXTokens, MATERIAL_X_TOKENS);
 TF_DEFINE_PUBLIC_TOKENS(OpenPbrTokens, OPEN_PBR_TOKENS);
 TF_DEFINE_PUBLIC_TOKENS(AdobeNgpTokens, ADOBE_NGP_TOKENS);
+TF_DEFINE_PUBLIC_TOKENS(AdobeGsplatBaseTokens, ADOBE_GSPLAT_BASE_TOKENS);
+TF_DEFINE_PUBLIC_TOKENS(AdobeGsplatSHTokens, ADOBE_GSPLAT_SH_TOKENS);
 PXR_NAMESPACE_CLOSE_SCOPE
 
 using namespace PXR_NS;
@@ -97,6 +107,17 @@ argReadString(const PXR_NS::SdfFileFormat::FileFormatArguments& args,
 }
 
 void
+argReadString(const PXR_NS::SdfFileFormat::FileFormatArguments& args,
+              const std::string& arg,
+              PXR_NS::TfToken& target,
+              const std::string& debugTag)
+{
+    std::string targetStr;
+    argReadString(args, arg, targetStr, debugTag);
+    target = PXR_NS::TfToken(targetStr);
+}
+
+void
 argReadBool(const PXR_NS::SdfFileFormat::FileFormatArguments& args,
             const std::string& arg,
             bool& target,
@@ -126,6 +147,25 @@ argReadFloat(const PXR_NS::SdfFileFormat::FileFormatArguments& args,
                      arg.c_str(),
                      it->second.c_str());
     }
+}
+
+std::string
+getFileExtension(const std::string& filePath, const std::string& defaultValue = "") {
+    // Find the last dot position
+    std::size_t dotPos = filePath.rfind('.');
+    if (dotPos != std::string::npos && dotPos + 1 < filePath.size()) {
+        return filePath.substr(dotPos + 1);
+    }
+    return defaultValue;
+}
+
+std::string
+getCurrentDate() {
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d");
+    return ss.str();
 }
 
 }

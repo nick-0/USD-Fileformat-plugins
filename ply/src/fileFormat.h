@@ -32,6 +32,8 @@ class PlyData : public FileFormatDataBase
 {
   public:
     bool points = false;
+    bool withUpAxisCorrection = true;
+    bool gsplatsWithClipping = true;
     float pointWidth = 0.01f;
     static PlyDataRefPtr InitData(const SdfFileFormat::FileFormatArguments& args);
 };
@@ -83,6 +85,8 @@ class USDPLY_API UsdPlyFileFormat
   protected:
     static const TfToken pointsToken;
     static const TfToken pointWidthToken;
+    static const TfToken withUpAxisCorrectionToken;
+    static const TfToken pointsGsplatWithClippingToken;
 
     SDF_FILE_FORMAT_FACTORY_ACCESS;
     virtual ~UsdPlyFileFormat();

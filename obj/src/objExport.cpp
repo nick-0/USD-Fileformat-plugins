@@ -97,12 +97,13 @@ exportMesh(Obj& obj,
     o.groups.push_back(ObjGroup());
     ObjGroup& g = o.groups.back();
     const Mesh& m = usd.meshes[meshIndex];
+    bool doSRGBConversion = shouldConvertToSRGB(usd, obj.outputColorSpace);
     g.name = m.name.empty()
                ? "Node_" + std::to_string(nodeIndex) + "_Mesh_" + std::to_string(meshIndex)
                : m.name;
     g.material = m.material;
-    g.faces = std::move(m.faces);
-    g.indices = std::move(m.indices);
+    g.faces = m.faces;
+    g.indices = m.indices;
     if (m.uvs.indices.size()) {
         g.uvIndices = m.uvs.indices;
     } else if (m.uvs.values.size() == m.points.size()) {
@@ -119,14 +120,22 @@ exportMesh(Obj& obj,
         g.normalIndices.resize(m.indices.size());
         std::iota(g.normalIndices.begin(), g.normalIndices.end(), 0);
     }
-    g.vertices = std::move(m.points);
+    g.vertices = m.points;
     for (GfVec3f& v : g.vertices) {
         v = worldTransform.Transform(v);
     }
     if (m.colors.size()) {
         const Primvar<PXR_NS::GfVec3f>& color = m.colors[0]; // only export first color set
         if (color.indices.size() == 0 && color.values.size() == m.points.size()) {
-            g.colors = std::move(color.values);
+            g.colors = color.values;
+            // Perform color space conversion if necessary
+            if (doSRGBConversion) {
+                for (GfVec3f& c : g.colors) {
+                    c[0] = linearToSRGB(c[0]);
+                    c[1] = linearToSRGB(c[1]);
+                    c[2] = linearToSRGB(c[2]);
+                }
+            }
         } else {
             TF_DEBUG_MSG(FILE_FORMAT_OBJ, "obj::write color indexing unsupported\n");
         }
@@ -135,8 +144,8 @@ exportMesh(Obj& obj,
                     "obj::write more than 1 color set found, exporting only the first.\n");
         }
     }
-    g.uvs = std::move(m.uvs.values);
-    g.normals = std::move(m.normals.values);
+    g.uvs = m.uvs.values;
+    g.normals = m.normals.values;
     auto normalTransform = worldTransform.GetInverse().GetTranspose();
     for (GfVec3f& v : g.normals) {
         v = normalTransform.TransformDir(v);
@@ -147,7 +156,7 @@ exportMesh(Obj& obj,
             g.subsets.push_back(ObjSubset());
             ObjSubset& s = g.subsets.back();
             s.material = usdSubset.material;
-            s.faces = std::move(usdSubset.faces);
+            s.faces = usdSubset.faces;
         }
     } else {
         g.subsets.push_back(ObjSubset());
@@ -198,11 +207,8 @@ exportObj(const ExportObjOptions& options, const UsdData& usd, Obj& obj)
                      "obj::write correct rotation { rotX: %s }\n",
                      usd.upAxis == PXR_NS::UsdGeomTokens->z ? "-90deg" : "0deg");
     }
-    if (usd.metersPerUnit != 1 && usd.metersPerUnit > 0) {
-        correctionTransform *= GfMatrix4d(1).SetScale(usd.metersPerUnit);
-        TF_DEBUG_MSG(
-          FILE_FORMAT_OBJ, "obj::write correct scale { metersPerUnit: %f }\n", usd.metersPerUnit);
-    }
+
+    obj.comments.push_back("# Meters per unit: " + TfStringify(usd.metersPerUnit));
 
     const std::string name = TfStringGetBeforeSuffix(TfGetBaseName(options.filename));
     obj.filenames.push_back(name + ".obj");
@@ -214,7 +220,7 @@ exportObj(const ExportObjOptions& options, const UsdData& usd, Obj& obj)
         image.name = usdImage.name;
         image.uri = usdImage.uri;
         image.format = usdImage.format;
-        image.image = std::move(usdImage.image);
+        image.image = usdImage.image;
     }
 
     if (!usd.materials.empty()) {
@@ -224,11 +230,21 @@ exportObj(const ExportObjOptions& options, const UsdData& usd, Obj& obj)
 
         obj.materials.resize(usd.materials.size());
         library.materials.resize(usd.materials.size());
+
+        // Use the UniqueNameEnforcer to create a new list of unique material names.
+        UniqueNameEnforcer uniqueMaterialNameEnforcer;
+        std::vector<std::string> uniqueNames;
+        uniqueNames.reserve(usd.materials.size());
+        for (auto &m : usd.materials) {
+            uniqueNames.push_back(m.name);
+            uniqueMaterialNameEnforcer.enforceUniqueness(uniqueNames.back());
+        }
+
         for (size_t i = 0; i < usd.materials.size(); i++) {
             const Material& m = usd.materials[i];
             ObjMaterial& om = obj.materials[i];
             library.materials[i] = i;
-            om.name = m.name;
+            om.name = uniqueNames[i];
             writeObjMaterialValue(om.kd, m.diffuseColor);
             writeObjMaterialValue(om.ni, m.ior);
             writeObjMaterialValue(om.d, m.opacity);

@@ -16,13 +16,11 @@ governing permissions and limitations under the License.
 #include <sbsarEngine/sbsarRender.h>
 #include <sbsarEngine/sbsarRenderThread.h>
 
-#include <assetPath/assetPathParser.h>
-#include <assetResolver/sbsarImage.h>
+#include <config/sbsarConfig.h>
+
 #include <sbsarDebug.h>
-#include <usdGeneration/usdGenerationHelpers.h>
 
 #include <substance/framework/framework.h>
-#include <substance/linker/handle.h>
 
 #include <utility>
 
@@ -31,9 +29,7 @@ governing permissions and limitations under the License.
 
 #include <chrono>
 #include <condition_variable>
-#include <fstream>
 #include <map>
-#include <set>
 #include <thread>
 
 PXR_NAMESPACE_USING_DIRECTIVE
@@ -53,7 +49,7 @@ struct RenderThreadState
     std::shared_ptr<SubstanceAir::Renderer> renderer;
     AssetCache assetCache;
     CacheStats cacheStats;
-    CacheSize cacheSize;
+    SbsarConfigRefPtr config;
     std::map<RenderCacheKey, ParsePathResult> readRequests;
 
     RenderThreadState();
@@ -87,11 +83,6 @@ renderThreadFn()
     try {
         RenderThreadState* state = getRenderThreadState();
         TF_AXIOM(!state->renderer);
-        // Make sure the renderer is initialized inside the render thread
-        // to avoid any issues with creating GL contexts from the wrong thread
-        state->renderer = std::shared_ptr<SubstanceAir::Renderer>(
-          new SubstanceAir::Renderer(SubstanceAir::RenderOptions(), getPreferredEngineDll()),
-          [](SubstanceAir::Renderer*) {});
 
         while (!state->shutDown) {
             std::unique_lock<std::mutex> guard(state->lock);
@@ -103,6 +94,18 @@ renderThreadFn()
                 // renderSbsarAsset failed, the texture might have been
                 // prefetched at this point so we can skip rendering
                 if (!state->assetCache.hasRenderResult(parsePathResult)) {
+                    // We initialize the renderer just before it is needed to render a request
+                    if (!state->renderer) {
+                        TF_DEBUG(SBSAR_RENDER)
+                          .Msg("SbsarRenderThread: Initialize Substance engine\n");
+                        // Make sure the renderer is initialized inside the render thread
+                        // to avoid any issues with creating GL contexts from the wrong thread
+                        state->renderer = std::shared_ptr<SubstanceAir::Renderer>(
+                          new SubstanceAir::Renderer(SubstanceAir::RenderOptions(),
+                                                     getPreferredEngineDll()),
+                          [](SubstanceAir::Renderer*) {});
+                    }
+
                     ++state->cacheStats.renderingCall;
                     TF_DEBUG(SBSAR_RENDER)
                       .Msg("SbsarRenderThread: Didn't find %s, "
@@ -151,7 +154,7 @@ template<typename T>
 bool
 resultIsValid(const T& elem)
 {
-    if constexpr (std::is_same_v<T, std::shared_ptr<ArAsset>>)
+    if constexpr (std::is_same_v<T, std::shared_ptr<SbsarAsset>>)
         return elem != nullptr;
     else if constexpr (std::is_same_v<T, VtValue>)
         return !elem.IsEmpty();
@@ -162,7 +165,7 @@ template<typename T>
 T
 findResultInCache(const ParsePathResult& parseOutput, RenderThreadState* state)
 {
-    if constexpr (std::is_same_v<T, std::shared_ptr<ArAsset>>)
+    if constexpr (std::is_same_v<T, std::shared_ptr<SbsarAsset>>)
         return state->assetCache.getAsset(parseOutput);
     if constexpr (std::is_same_v<T, VtValue>)
         return state->assetCache.getNumericalValue(parseOutput);
@@ -173,10 +176,10 @@ template<typename T>
 bool
 resultExistInTheOtherCache(const ParsePathResult& parseOutput, RenderThreadState* state)
 {
-    if constexpr (std::is_same_v<T, std::shared_ptr<ArAsset>>)
+    if constexpr (std::is_same_v<T, std::shared_ptr<SbsarAsset>>)
         return resultIsValid<VtValue>(state->assetCache.getNumericalValue(parseOutput));
     if constexpr (std::is_same_v<T, VtValue>)
-        return resultIsValid<std::shared_ptr<ArAsset>>(state->assetCache.getAsset(parseOutput));
+        return resultIsValid<std::shared_ptr<SbsarAsset>>(state->assetCache.getAsset(parseOutput));
 }
 
 //! Ask to the cache if the asset or a value is already exist for the given paths, if not request a
@@ -243,7 +246,7 @@ requestRender(const std::string& packagePath, const std::string& packagedPath)
 std::shared_ptr<ArAsset>
 renderSbsarAsset(const std::string& packagePath, const std::string& packagedPath)
 {
-    return requestRender<std::shared_ptr<ArAsset>>(packagePath, packagedPath);
+    return requestRender<std::shared_ptr<SbsarAsset>>(packagePath, packagedPath);
 }
 
 VtValue
@@ -272,13 +275,6 @@ getCacheStats()
     return state->cacheStats;
 }
 
-CacheSize&
-getCacheSize()
-{
-    RenderThreadState* state = getRenderThreadState();
-    return state->cacheSize;
-}
-
 RenderThreadState::RenderThreadState()
 {
 #ifdef _WIN32
@@ -293,6 +289,9 @@ RenderThreadState::RenderThreadState()
     // Remove destruction to "work around" lock at end
     // Leaving Renderer uninitialized to make sure the renderer is created
     // by the render thread to avoid GL context issues
+
+    // Get config to ensure it exist at the beginning of the render thread.
+    config = getSbsarConfig();
 }
 RenderThreadState::~RenderThreadState()
 {
@@ -306,50 +305,6 @@ RenderThreadState::~RenderThreadState()
     renderThread->join();
     TF_DEBUG(SBSAR_RENDER).Msg("SbsarRenderThread: Cleaning up renderer\n");
     renderer.reset();
-}
-CacheSize::CacheSize()
-{
-    setMaxAssetCacheSize();
-    setMaxInputImageCacheSize();
-    setMaxPackageCacheSize();
-}
-
-std::size_t
-CacheSize::getMaxAssetCacheSize() const
-{
-    return m_maxAssetCacheSize;
-}
-
-std::size_t
-CacheSize::getMaxInputImageCacheSize() const
-{
-    return m_maxInputImageCacheSize;
-}
-
-std::size_t
-CacheSize::getMaxPackageCacheSize() const
-{
-    return m_maxPackageCacheSize;
-}
-void
-CacheSize::setMaxAssetCacheSize(std::size_t size)
-{
-    m_maxAssetCacheSize = size;
-}
-
-void
-CacheSize::setMaxInputImageCacheSize(std::size_t size)
-{
-    m_maxInputImageCacheSize = size;
-}
-void
-CacheSize::setMaxPackageCacheSize(std::size_t size)
-{
-    if (size == 0) {
-        TF_RUNTIME_ERROR("Package cache size cannot be 0");
-        return;
-    }
-    m_maxPackageCacheSize = size;
 }
 
 } // namespace adobe::usd::sbsar

@@ -15,8 +15,13 @@ governing permissions and limitations under the License.
 #include <sbsarEngine/sbsarInputImageCache.h>
 #include <sbsarEngine/sbsarRender.h>
 
+#include <pxr/base/gf/vec2f.h>
+#include <pxr/base/gf/vec2i.h>
+#include <pxr/base/gf/vec3f.h>
+#include <pxr/base/gf/vec3i.h>
+#include <pxr/base/gf/vec4f.h>
+#include <pxr/base/gf/vec4i.h>
 #include <pxr/base/tf/diagnostic.h>
-#include <pxr/usd/ar/inMemoryAsset.h>
 #include <substance/framework/framework.h>
 
 using namespace SubstanceAir;
@@ -56,7 +61,7 @@ applyParameterValue(InputInstanceBase* i, SubstanceIOType type, const JsValue& v
             std::vector<double> a;
             getAsDoubleArray(v, a);
             if (a.size() != 2) {
-                TF_RUNTIME_ERROR("SbsarRender: Incorrect data size");
+                TF_RUNTIME_ERROR("SbsarRender: cast 'Substance_IOType_Float2', incorrect data size, the size is {}", a.size());
                 return false;
             }
             f->setValue(Vec2Float(static_cast<float>(a[0]), static_cast<float>(a[1])));
@@ -71,7 +76,7 @@ applyParameterValue(InputInstanceBase* i, SubstanceIOType type, const JsValue& v
             std::vector<double> a;
             getAsDoubleArray(v, a);
             if (a.size() != 3) {
-                TF_RUNTIME_ERROR("SbsarRender: Incorrect data size");
+                TF_RUNTIME_ERROR("SbsarRender: cast 'Substance_IOType_Float3', incorrect data size, the size is {}", a.size());
                 return false;
             }
             f->setValue(Vec3Float(
@@ -87,7 +92,7 @@ applyParameterValue(InputInstanceBase* i, SubstanceIOType type, const JsValue& v
             std::vector<double> a;
             getAsDoubleArray(v, a);
             if (a.size() != 4) {
-                TF_RUNTIME_ERROR("SbsarRender: Incorrect data size");
+                TF_RUNTIME_ERROR("SbsarRender: cast 'Substance_IOType_Float4', incorrect data size, the size is {}", a.size());
                 return false;
             }
             f->setValue(Vec4Float(static_cast<float>(a[0]),
@@ -119,7 +124,7 @@ applyParameterValue(InputInstanceBase* i, SubstanceIOType type, const JsValue& v
             std::vector<int> a;
             getAsIntArray(v, a);
             if (a.size() != 2) {
-                TF_RUNTIME_ERROR("SbsarRender: Incorrect data size");
+                TF_RUNTIME_ERROR("SbsarRender: cast 'Substance_IOType_Integer2', incorrect data size, the size is {}", a.size());
                 return false;
             }
             ii->setValue(Vec2Int(a[0], a[1]));
@@ -134,7 +139,7 @@ applyParameterValue(InputInstanceBase* i, SubstanceIOType type, const JsValue& v
             std::vector<int> a;
             getAsIntArray(v, a);
             if (a.size() != 3) {
-                TF_RUNTIME_ERROR("SbsarRender: Incorrect data size");
+                TF_RUNTIME_ERROR("SbsarRender: cast 'Substance_IOType_Integer3', incorrect data size, the size is {}", a.size());
                 return false;
             }
             ii->setValue(Vec3Int(a[0], a[1], a[2]));
@@ -149,7 +154,7 @@ applyParameterValue(InputInstanceBase* i, SubstanceIOType type, const JsValue& v
             std::vector<int> a;
             getAsIntArray(v, a);
             if (a.size() != 4) {
-                TF_RUNTIME_ERROR("SbsarRender: Incorrect data size");
+                TF_RUNTIME_ERROR("SbsarRender: cast 'Substance_IOType_Integer4', incorrect data size, the size is {}", a.size());
                 return false;
             }
             ii->setValue(Vec4Int(a[0], a[1], a[2], a[3]));
@@ -243,46 +248,53 @@ getNewestOutputResult(SubstanceAir::OutputInstance* output)
     return result;
 }
 
-std::shared_ptr<ArAsset>
-convertToArAsset(const RenderResultImage& img, const std::string& graphName)
-{
-    auto tex = img.getTexture();
-    size_t bytePerPixel = SbsarImage::getBytePerPixel(tex.pixelFormat);
-    size_t data_size = tex.level0Height * tex.level0Width * bytePerPixel;
-    size_t buffer_size = sizeof(SbsarImage::ImageHeader) + data_size;
-    auto buffer = std::shared_ptr<char>(new char[buffer_size], std::default_delete<char[]>());
-    SbsarImage::ImageHeader* header = reinterpret_cast<SbsarImage::ImageHeader*>(buffer.get());
-    char* data = buffer.get() + sizeof(SbsarImage::ImageHeader);
-    header->level0Width = tex.level0Width;
-    header->level0Height = tex.level0Height;
-    header->pixelFormat = tex.pixelFormat;
-    header->channelsOrder = Substance_ChanOrder_RGBA;
-    header->mipmapCount = tex.mipmapCount;
-    header->isSRGB = graphName == "baseColor";
-
-    memcpy(data, tex.buffer, data_size);
-    return PXR_NS::ArInMemoryAsset::FromBuffer(std::move(buffer), buffer_size);
-}
-
 VtValue
 convertToVtValue(const RenderResultNumericalBase& res)
 {
     if (res.isNumerical()) {
-        if (res.mType == Substance_IOType_Float) {
-            const RenderResultFloat* num = dynamic_cast<const RenderResultFloat*>(&res);
-            return VtValue(num->mValue);
-        }
-        // XXX asm doesn't have integer value, so if an int is found it's necessarily a bool
-        else if (res.mType == Substance_IOType_Integer) {
-            const RenderResultInt* num = dynamic_cast<const RenderResultInt*>(&res);
-            if (num->mValue == 0) {
-                return VtValue(false);
-            } else {
-                return VtValue(true);
+        switch (res.mType) {
+            case Substance_IOType_Float: {
+                const RenderResultFloat* num = dynamic_cast<const RenderResultFloat*>(&res);
+                return VtValue(num->mValue);
             }
-        } else {
-            TF_RUNTIME_ERROR("Failed to convert to VtValue, unsupported output value");
-            return VtValue();
+            case Substance_IOType_Float2: {
+                const RenderResultFloat2* num = dynamic_cast<const RenderResultFloat2*>(&res);
+                return VtValue(PXR_NS::GfVec2f(num->mValue.x, num->mValue.y));
+            }
+            case Substance_IOType_Float3: {
+                const RenderResultFloat3* num = dynamic_cast<const RenderResultFloat3*>(&res);
+                return VtValue(PXR_NS::GfVec3f(num->mValue.x, num->mValue.y, num->mValue.z));
+            }
+            case Substance_IOType_Float4: {
+                const RenderResultFloat4* num = dynamic_cast<const RenderResultFloat4*>(&res);
+                return VtValue(
+                  PXR_NS::GfVec4f(num->mValue.x, num->mValue.y, num->mValue.z, num->mValue.w));
+            }
+            // XXX asm doesn't have integer value, so if an int is found it's necessarily a bool
+            case Substance_IOType_Integer: {
+                const RenderResultInt* num = dynamic_cast<const RenderResultInt*>(&res);
+                if (num->mValue == 0) {
+                    return VtValue(false);
+                } else {
+                    return VtValue(true);
+                }
+            }
+            case Substance_IOType_Integer2: {
+                const RenderResultInt2* num = dynamic_cast<const RenderResultInt2*>(&res);
+                return VtValue(PXR_NS::GfVec2i(num->mValue.x, num->mValue.y));
+            }
+            case Substance_IOType_Integer3: {
+                const RenderResultInt3* num = dynamic_cast<const RenderResultInt3*>(&res);
+                return VtValue(PXR_NS::GfVec3i(num->mValue.x, num->mValue.y, num->mValue.z));
+            }
+            case Substance_IOType_Integer4: {
+                const RenderResultInt4* num = dynamic_cast<const RenderResultInt4*>(&res);
+                return VtValue(
+                  PXR_NS::GfVec4i(num->mValue.x, num->mValue.y, num->mValue.z, num->mValue.w));
+            }
+            default:
+                TF_RUNTIME_ERROR("Failed to convert to VtValue, unsupported output value");
+                return VtValue();
         }
     }
     TF_RUNTIME_ERROR("Failed to convert to VtValue, engine result is not numerical");
@@ -343,11 +355,13 @@ renderGraph(Renderer& renderer,
                 renderResult.addNumericalValue(usage.c_str(),
                                                convertToVtValue(*renderResultNumerical));
         } else if (res->isImage()) {
-            auto renderResultImage = dynamic_cast<RenderResultImage*>(res.get());
+            std::shared_ptr<RenderResultImage> renderResultImage(
+              dynamic_cast<RenderResultImage*>(res.release()),
+              SubstanceAir::deleter<RenderResultImage>());
+            std::shared_ptr<SbsarAsset> asset = std::make_shared<SbsarAsset>(renderResultImage);
             TF_AXIOM(renderResultImage);
             for (const SubstanceAir::string& usage : o->mDesc.mChannelsStr) {
-                renderResult.addAsset(usage.c_str(),
-                                      convertToArAsset(*renderResultImage, usage.c_str()));
+                renderResult.addAsset(usage.c_str(), asset);
             }
         }
     }

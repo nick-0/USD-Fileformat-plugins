@@ -10,6 +10,8 @@ OF ANY KIND, either express or implied. See the License for the specific languag
 governing permissions and limitations under the License.
 */
 #pragma once
+#include <substance/framework/framework.h>
+
 #include <api.h>
 #include <memory>
 #include <pxr/base/vt/value.h>
@@ -24,10 +26,10 @@ namespace adobe::usd::sbsar {
 
 //! \brief Resolve a request coming from the USD asset system: render a sbsar texture with the
 //! substance engine and return the corresponding ArAsset.
-//! \param packagePath  The complete path to the package the
-//! should be opened \param packagedPath A complexe string generate by generateSbsarInfoPath() that
-//! containt all information to run a rendering with the substance engine. \see
-//! generateSbsarInfoPath()
+//! \param packagePath  The complete path to the package the should be opened
+//! \param packagedPath A complexe string generate by generateSbsarInfoPath() that
+//! containt all information to run a rendering with the substance engine.
+//! \see generateSbsarInfoPath()
 USDSBSAR_API std::shared_ptr<PXR_NS::ArAsset>
 renderSbsarAsset(const std::string& packagePath, const std::string& packagedPath);
 
@@ -37,29 +39,8 @@ renderSbsarAsset(const std::string& packagePath, const std::string& packagedPath
 //! \param packagedPath A complexe string generate by generateSbsarInfoPath() that containt all
 //! information to run a rendering with the substance engine.
 //! \see generateSbsarInfoPath()
-PXR_NS::VtValue
+USDSBSAR_API PXR_NS::VtValue
 renderSbsarValue(const std::string& packagePath, const std::string& packagedPath);
-
-//! \brief Stored in the singleton, control the size of different cache.
-class USDSBSAR_API CacheSize
-{
-  public:
-    CacheSize();
-    std::size_t getMaxAssetCacheSize() const;
-    std::size_t getMaxInputImageCacheSize() const;
-    std::size_t getMaxPackageCacheSize() const;
-    void setMaxAssetCacheSize(std::size_t size = 1'000'000'000);
-    void setMaxInputImageCacheSize(std::size_t size = 1'000'000'000);
-    void setMaxPackageCacheSize(std::size_t size = 10);
-
-  private:
-    std::size_t m_maxAssetCacheSize;      //! In bytes
-    std::size_t m_maxInputImageCacheSize; //! In bytes
-    std::size_t m_maxPackageCacheSize;    //! Max number of packages
-};
-
-USDSBSAR_API CacheSize&
-getCacheSize();
 
 //! \brief Store in the singleton, used to test the cache system.
 struct USDSBSAR_API CacheStats

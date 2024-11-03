@@ -28,7 +28,9 @@ governing permissions and limitations under the License.
 #include <iomanip>
 
 // File format utils
+#include <images.h>
 #include <sdfUtils.h>
+
 #include <string>
 
 PXR_NAMESPACE_USING_DIRECTIVE
@@ -46,8 +48,10 @@ TF_DEFINE_PRIVATE_TOKENS(_tokens,
 // clang-format on
 
 // # TODO it's hardcoded
+// clang-format off
 const std::vector<std::string> mapped_usages = {
     "baseColor",
+    "absorptionColor",
     "ambientOcclusion",
     "roughness",
     "metallic",
@@ -72,6 +76,7 @@ const std::vector<std::string> mapped_usages = {
     "scatteringDistanceScale",
     "scatteringColor",
 };
+// clang-format on
 
 const std::vector<std::string> uniform_usages = { "IOR",
                                                   "absorptionDistance",
@@ -87,118 +92,130 @@ const std::vector<std::string> uniform_usages = { "IOR",
                                                   "heightScale",
                                                   "normalScale" };
 
+const std::map<std::string, std::string> reserved_label_map = { { "$time", "Time" },
+                                                                { "$outputsize", "Output Size" },
+                                                                { "$randomseed", "Random Seed" },
+                                                                { "$physicalsize",
+                                                                  "Physical Size" } };
+
 const std::map<std::string, DefaultChannel> default_channels = {
     { "baseColor",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.5f, 0.5f, 0.5f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
+    { "absorptionColor",
+      { SdfValueTypeNames->Float4,
+        VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)),
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "normal",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.0f, 0.0f, 1.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "roughness",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.5f, 0.5f, 0.5f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "metallic",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "height",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.5f, 0.5f, 0.5f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "opacity",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "specularLevel",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.5f, 0.5f, 0.5f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "specularEdgeColor",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "anisotropyLevel",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "anisotropyAngle",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "sheenOpacity",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "sheenRoughness",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.5f, 0.5f, 0.5f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "coatOpacity",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "coatNormal",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.0f, 0.1f, 0.1f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "coatRoughness",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "coatSpecularLevel",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.5f, 0.5f, 0.5f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "translucency",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "scatteringDistanceScale",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "scatteringColor",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     { "emissive",
       { SdfValueTypeNames->Float4,
         VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)),
-        { VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)), VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)) } } },
+        { VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f)), VtValue(GfVec4f(1.0f, 1.0f, 1.0f, 1.0f)) } } },
     // Uniform
-    { "IOR", { SdfValueTypeNames->Float, VtValue(1.4f), { VtValue(2.0f), VtValue(0.0f) } } },
+    { "IOR", { SdfValueTypeNames->Float, VtValue(1.4f), { VtValue(0.0f), VtValue(2.0f) } } },
     { "absorptionDistance",
-      { SdfValueTypeNames->Float, VtValue(0.0f), { VtValue(1000.0f), VtValue(0.0f) } } },
+      { SdfValueTypeNames->Float, VtValue(0.0f), { VtValue(0.0f), VtValue(1000.0f) } } },
     { "coatNormalScale",
-      { SdfValueTypeNames->Float, VtValue(1.0f), { VtValue(1000.0f), VtValue(0.0f) } } },
-    { "coatIOR", { SdfValueTypeNames->Float, VtValue(1.6f), { VtValue(3.0f), VtValue(1.0f) } } },
-    { "scatter", { SdfValueTypeNames->Bool, VtValue(false), { VtValue(1.0f), VtValue(0.0f) } } },
+      { SdfValueTypeNames->Float, VtValue(1.0f), { VtValue(0.0f), VtValue(1000.0f) } } },
+    { "coatIOR", { SdfValueTypeNames->Float, VtValue(1.6f), { VtValue(1.0f), VtValue(3.0f) } } },
+    { "scatter", { SdfValueTypeNames->Bool, VtValue(false), { VtValue(0.0f), VtValue(1.0f) } } },
     { "scatteringRayleigh",
-      { SdfValueTypeNames->Float, VtValue(0.0f), { VtValue(1.0f), VtValue(0.0f) } } },
+      { SdfValueTypeNames->Float, VtValue(0.0f), { VtValue(0.0f), VtValue(1.0f) } } },
     { "scatteringRedShift",
-      { SdfValueTypeNames->Float, VtValue(0.0f), { VtValue(1.0f), VtValue(0.0f) } } },
+      { SdfValueTypeNames->Float, VtValue(0.0f), { VtValue(0.0f), VtValue(1.0f) } } },
     { "scatteringDistance",
-      { SdfValueTypeNames->Float, VtValue(1.0f), { VtValue(1000.0f), VtValue(0.0f) } } },
+      { SdfValueTypeNames->Float, VtValue(1.0f), { VtValue(0.0f), VtValue(1000.0f) } } },
     { "emissiveIntensity",
-      { SdfValueTypeNames->Float, VtValue(0.0f), { VtValue(1000.0f), VtValue(0.0f) } } },
+      { SdfValueTypeNames->Float, VtValue(0.0f), { VtValue(0.0f), VtValue(1000.0f) } } },
     { "combineNormalAndHeight",
-      { SdfValueTypeNames->Bool, VtValue(false), { VtValue(1.0f), VtValue(0.0f) } } },
+      { SdfValueTypeNames->Bool, VtValue(false), { VtValue(0.0f), VtValue(1.0f) } } },
     { "heightLevel",
-      { SdfValueTypeNames->Float, VtValue(0.5f), { VtValue(1.0f), VtValue(0.0f) } } },
+      { SdfValueTypeNames->Float, VtValue(0.5f), { VtValue(0.0f), VtValue(1.0f) } } },
     { "heightScale",
-      { SdfValueTypeNames->Float, VtValue(1.0f), { VtValue(1000.0f), VtValue(0.0f) } } },
+      { SdfValueTypeNames->Float, VtValue(1.0f), { VtValue(0.0f), VtValue(1000.0f) } } },
     { "normalScale",
-      { SdfValueTypeNames->Float, VtValue(1.0f), { VtValue(1000.0f), VtValue(0.0f) } } }
+      { SdfValueTypeNames->Float, VtValue(1.0f), { VtValue(0.0f), VtValue(1000.0f) } } }
 };
 
-const std::vector<int> default_resolutions = { 4, 5, 6, 7, 8, 9, 10, 11, 12 };
+const std::vector<int> default_resolutions = { 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
 
 const std::string uv_scale_input("uvscale");
 const std::string uv_rotation_input("uvrotation");
 const std::string uv_translation_input("uvtranslation");
+
+const std::string uv_channel_name("uvChannelName");
 
 const std::string proceduralParameterPrefix("procedural_sbsar:");
 
@@ -269,8 +286,19 @@ hasUsage(const std::string& usage, const GraphDesc& graphDesc)
     return false;
 }
 
+bool
+hasInput(const std::string& identifier, const GraphDesc& graphDesc)
+{
+    for (const auto& input : graphDesc.mInputs) {
+        if (identifier.c_str() == input->mIdentifier) {
+            return true;
+        }
+    }
+    return false;
+}
+
 JsValue
-convertSbsarParamters(const VtDictionary& sbsarParameters)
+convertSbsarParameters(const VtDictionary& sbsarParameters)
 {
     std::stringstream temp;
     DictEncoder::writeDict(sbsarParameters, temp);
@@ -280,6 +308,30 @@ convertSbsarParamters(const VtDictionary& sbsarParameters)
         return {};
     }
     return params;
+}
+
+void
+convertColorLinearToSRGB(VtValue& value)
+{
+    if (value.IsHolding<GfVec3f>()) {
+        GfVec3f v = value.UncheckedGet<GfVec3f>();
+        v[0] = linearToSRGB(v[0]);
+        v[1] = linearToSRGB(v[1]);
+        v[2] = linearToSRGB(v[2]);
+        value = v;
+    }
+}
+
+void
+convertColorSRGBToLinear(VtValue& value)
+{
+    if (value.IsHolding<GfVec3f>()) {
+        GfVec3f v = value.UncheckedGet<GfVec3f>();
+        v[0] = srgbToLinear(v[0]);
+        v[1] = srgbToLinear(v[1]);
+        v[2] = srgbToLinear(v[2]);
+        value = v;
+    }
 }
 
 std::string
@@ -498,13 +550,19 @@ substanceToUsdType(const SubstanceAir::Vec4Int& v)
     return GfVec4i(v.x, v.y, v.z, v.w);
 }
 
+GfVec3f
+sRGBColorToLinear(const GfVec3f& v)
+{
+    return GfVec3f(srgbToLinear(v[0]), srgbToLinear(v[1]), srgbToLinear(v[2]));
+}
+
 template<typename T>
 void
 setupNumericalInput(const InputDescNumerical<T>* numericInput,
                     VtValue& defaultValue,
                     VtDictionary& guiWidgetData)
 {
-    defaultValue = VtValue(substanceToUsdType(numericInput->mDefaultValue));
+    auto usdDefaultValue = substanceToUsdType(numericInput->mDefaultValue);
 
     if (numericInput->mGuiWidget == SubstanceAir::InputWidget::Input_Slider) {
         guiWidgetData["minValue"] = VtValue(substanceToUsdType(numericInput->mMinValue));
@@ -517,7 +575,7 @@ setupNumericalInput(const InputDescNumerical<T>* numericInput,
             for (const auto& label : numericInput->mGuiVecLabels) {
                 vecLabels.emplace_back(label);
             }
-            guiWidgetData["vecLabels"] = VtValue(vecLabels);
+            guiWidgetData["vecLabels"] = VtArray<std::string>(vecLabels.begin(), vecLabels.end());
         }
     } else if (numericInput->mGuiWidget == SubstanceAir::InputWidget::Input_Combobox) {
         VtArray<std::string> enumValues;
@@ -535,7 +593,16 @@ setupNumericalInput(const InputDescNumerical<T>* numericInput,
         guiWidgetData["maxValue"] = VtValue(numericInput->mMaxValue);
     } else if (numericInput->mGuiWidget == SubstanceAir::InputWidget::Input_Color) {
         guiWidgetData["spotColorInfo"] = VtValue(numericInput->mSpotColorInfo.c_str());
+
+        if constexpr (std::is_same_v<T, SubstanceAir::Vec3Float>) {
+            // Color values in USD are in linear space, but color inputs for a Substance graph are
+            // (usually) in sRGB space. So we convert the default value here. Note that we do the
+            // inverse transform when sending a color from USD to the engine.
+            usdDefaultValue = sRGBColorToLinear(usdDefaultValue);
+        }
     }
+
+    defaultValue = VtValue(usdDefaultValue);
 }
 
 void
@@ -611,7 +678,7 @@ setupProceduralParameters(SdfAbstractData* sdfData,
         } else {
             validProcParameter = false;
             TF_DEBUG(FILE_FORMAT_SBSAR)
-              .Msg("setupProceduralParameters: Unsupported input type\n",
+              .Msg("setupProceduralParameters: Unsupported input type for input %s\n",
                    input->mIdentifier.c_str());
         }
 
@@ -628,8 +695,13 @@ setupProceduralParameters(SdfAbstractData* sdfData,
             }
 
             // Set general metadata
+            auto stringLabel = std::string(input->mLabel);
+            auto it = reserved_label_map.find(stringLabel);
+            if (it != reserved_label_map.end()) {
+                stringLabel = it->second;
+            }
             setAttributeMetadata(
-              sdfData, paramPath, SdfFieldKeys->DisplayName, VtValue(input->mLabel.c_str()));
+              sdfData, paramPath, SdfFieldKeys->DisplayName, VtValue(stringLabel.c_str()));
             if (!input->mGuiGroup.empty()) {
                 setAttributeMetadata(sdfData,
                                      paramPath,
@@ -645,7 +717,6 @@ setupProceduralParameters(SdfAbstractData* sdfData,
             guiWidgetData["widget"] = VtValue((int)input->mGuiWidget);
             guiWidgetData["visibleIf"] = VtValue(input->mGuiVisibleIf.c_str());
             guiWidgetData["userTag"] = VtValue(input->mUserTag.c_str());
-
 
             // Set procedural metadata
             VtDictionary proceduralParameters;
@@ -771,6 +842,10 @@ addPresetVariant(SdfAbstractData* sdfData,
                 continue;
             }
 
+            if (inputDesc->mGuiWidget == SubstanceAir::InputWidget::Input_Color) {
+                convertColorSRGBToLinear(targetValue);
+            }
+
             TfToken paramToken = getInputParamToken(symbolMapper, val.mIdentifier);
             SdfPath paramPath =
               createAttributeSpec(sdfData, presetVariantPath, paramToken, targetType);
@@ -783,13 +858,13 @@ addPresetVariant(SdfAbstractData* sdfData,
 }
 
 void
-addResolutionVariant(SdfAbstractData* sdfData,
-                     SymbolMapper& symbolMapper,
-                     const SubstanceAir::GraphDesc& graphDesc,
-                     const std::string& packagePath,
-                     const SdfPath& primPath,
-                     const SdfPath& targetPrimPath,
-                     bool isEnvironmentTexture)
+addResolutionVariantSet(SdfAbstractData* sdfData,
+                        SymbolMapper& symbolMapper,
+                        const SubstanceAir::GraphDesc& graphDesc,
+                        const std::string& packagePath,
+                        const SdfPath& primPath,
+                        const SdfPath& targetPrimPath,
+                        bool isEnvironmentTexture)
 {
     SdfPath resolutionVSPath = createVariantSetSpec(sdfData, primPath, _tokens->resolution);
 
@@ -810,12 +885,18 @@ addResolutionVariant(SdfAbstractData* sdfData,
         addPresetVariant(
           sdfData, symbolMapper, graphDesc, packagePath, resVariantPath, targetPrimPath);
     }
+}
 
-    const int defaultXRes =
-      isEnvironmentTexture ? SBSAR_DEFAULT_RESOLUTION + 1 : SBSAR_DEFAULT_RESOLUTION;
-    const int defaultYRes = SBSAR_DEFAULT_RESOLUTION;
-    TfToken defaultResolutionVariant = TfToken(getResolutionVariantName(defaultXRes, defaultYRes));
-    addVariantSelection(sdfData, primPath, _tokens->resolution, defaultResolutionVariant);
+void
+addResolutionVariantSelection(SdfAbstractData* sdfData,
+                              const SdfPath& primPath,
+                              bool isEnvironmentTexture,
+                              int resolution)
+{
+    const int xRes = isEnvironmentTexture ? resolution + 1 : resolution;
+    const int yRes = resolution;
+    TfToken resolutionVariant = TfToken(getResolutionVariantName(xRes, yRes));
+    addVariantSelection(sdfData, primPath, _tokens->resolution, resolutionVariant);
 }
 
 void
@@ -825,7 +906,9 @@ addPayload(SdfAbstractData* sdfData,
            const SdfPath& targetPrimPath,
            std::uint32_t depth)
 {
-    std::string assetPath = packagePath + ":SDF_FORMAT_ARGS:depth=" + std::to_string(depth);
+    SdfLayer::FileFormatArguments arguments = { { "depth", std::to_string(depth) } };
+    std::string assetPath = SdfLayer::CreateIdentifier(packagePath, arguments);
+
     TF_DEBUG(FILE_FORMAT_SBSAR)
       .Msg("SDF:Write payload: %s, %s %s\n",
            primPath.GetText(),
@@ -833,5 +916,4 @@ addPayload(SdfAbstractData* sdfData,
            targetPrimPath.GetText());
     addPrimPayload(sdfData, primPath, SdfPayload(assetPath, targetPrimPath));
 }
-
 }

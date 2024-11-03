@@ -18,6 +18,8 @@ namespace adobe::usd {
 struct ImportPlyOptions
 {
     bool importAsPoints = false;
+    bool importWithUpAxisCorrection = true;
+    bool importGsplatWithClipping = true;
     float pointWidth = 0.01f;
 };
 

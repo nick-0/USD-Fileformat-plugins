@@ -13,6 +13,7 @@ governing permissions and limitations under the License.
 #include "common.h"
 #include "debugCodes.h"
 #include "geometry.h"
+#include "layerWriteShared.h"
 #include "usdData.h"
 #include <algorithm>
 #include <cstdio>
@@ -50,6 +51,7 @@ governing permissions and limitations under the License.
 #include <pxr/usd/usdGeom/nurbsCurves.h>
 #include <pxr/usd/usdGeom/nurbsPatch.h>
 #include <pxr/usd/usdGeom/pointInstancer.h>
+#include <pxr/usd/usdGeom/points.h>
 #include <pxr/usd/usdGeom/primvarsAPI.h>
 #include <pxr/usd/usdGeom/scope.h>
 #include <pxr/usd/usdGeom/sphere.h>
@@ -58,6 +60,12 @@ governing permissions and limitations under the License.
 #include <pxr/usd/usdGeom/xformCache.h>
 #include <pxr/usd/usdGeom/xformCommonAPI.h>
 #include <pxr/usd/usdGeom/xformable.h>
+#include <pxr/usd/usdLux/diskLight.h>
+#include <pxr/usd/usdLux/distantLight.h>
+#include <pxr/usd/usdLux/domeLight.h>
+#include <pxr/usd/usdLux/rectLight.h>
+#include <pxr/usd/usdLux/shapingAPI.h>
+#include <pxr/usd/usdLux/sphereLight.h>
 #include <pxr/usd/usdShade/connectableAPI.h>
 #include <pxr/usd/usdShade/materialBindingAPI.h>
 #include <pxr/usd/usdShade/output.h>
@@ -186,6 +194,7 @@ readNode(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
     auto [nodeIndex, node] = ctx.usd->addNode(parent);
     node.name = prim.GetName().GetString();
     node.path = prim.GetPath().GetString();
+
     readTransform(ctx, prim, node, parent);
     UsdGeomXformable xformable{ prim };
     // TODO: Set individual operations
@@ -231,34 +240,56 @@ readNode(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
             break;
         }
     }
+
+    auto ensureNodeAnimation = [&ctx](Node& node) -> NodeAnimation& {
+        ctx.usd->hasAnimations = true;
+        node.animations.resize(1);
+        return node.animations.front();
+    };
+
     if (hasTranslation) {
         std::vector<double> times;
         translationOp.GetTimeSamples(&times);
-        node.translations.times.resize(times.size());
-        node.translations.values.resize(times.size());
-        for (unsigned int i = 0; i < times.size(); i++) {
-            node.translations.times[i] = times[i];
-            translationOp.Get(&node.translations.values[i], node.translations.times[i]);
+        if (!times.empty()) {
+            NodeAnimation& nodeAnimation = ensureNodeAnimation(node);
+            nodeAnimation.translations.times.resize(times.size());
+            nodeAnimation.translations.values.resize(times.size());
+            for (unsigned int i = 0; i < times.size(); i++) {
+                nodeAnimation.translations.times[i] = times[i];
+
+                // Translation is stored as a vector of doubles. To extract it properly, we must
+                // fill a vec3d before converting it to a vec3f, as node.translations stores
+                GfVec3d vec3d;
+                translationOp.Get(&vec3d, nodeAnimation.translations.times[i]);
+                nodeAnimation.translations.values[i] = GfVec3f(vec3d);
+            }
         }
     }
     if (hasRotation) {
         std::vector<double> times;
         rotationOp.GetTimeSamples(&times);
-        node.rotations.times.resize(times.size());
-        node.rotations.values.resize(times.size());
-        for (unsigned int i = 0; i < times.size(); i++) {
-            node.rotations.times[i] = times[i];
-            rotationOp.Get(&node.rotations.values[i], node.rotations.times[i]);
+        if (!times.empty()) {
+            NodeAnimation& nodeAnimation = ensureNodeAnimation(node);
+            nodeAnimation.rotations.times.resize(times.size());
+            nodeAnimation.rotations.values.resize(times.size());
+            for (unsigned int i = 0; i < times.size(); i++) {
+                nodeAnimation.rotations.times[i] = times[i];
+                rotationOp.Get(&nodeAnimation.rotations.values[i],
+                               nodeAnimation.rotations.times[i]);
+            }
         }
     }
     if (hasScale) {
         std::vector<double> times;
         scaleOp.GetTimeSamples(&times);
-        node.scales.times.resize(times.size());
-        node.scales.values.resize(times.size());
-        for (unsigned int i = 0; i < times.size(); i++) {
-            node.scales.times[i] = times[i];
-            scaleOp.Get(&node.scales.values[i], node.scales.times[i]);
+        if (!times.empty()) {
+            NodeAnimation& nodeAnimation = ensureNodeAnimation(node);
+            nodeAnimation.scales.times.resize(times.size());
+            nodeAnimation.scales.values.resize(times.size());
+            for (unsigned int i = 0; i < times.size(); i++) {
+                nodeAnimation.scales.times[i] = times[i];
+                scaleOp.Get(&nodeAnimation.scales.values[i], nodeAnimation.scales.times[i]);
+            }
         }
     }
     UsdPrimSiblingRange children =
@@ -273,6 +304,7 @@ template<typename T>
 static bool
 readPrimvar(UsdGeomPrimvarsAPI& api, const TfToken& name, Primvar<T>& primvar)
 {
+    std::string str = name.GetString();
     UsdGeomPrimvar pv = api.GetPrimvar(name);
     if (pv.IsDefined()) {
         pv.Get(&primvar.values, 0);
@@ -283,8 +315,8 @@ readPrimvar(UsdGeomPrimvarsAPI& api, const TfToken& name, Primvar<T>& primvar)
     return false;
 }
 
-TfToken
-findPrimaryTextureCoordinatePrimvar(const UsdGeomPrimvarsAPI& api)
+TfTokenVector
+findTextureCoordinatePrimvars(const UsdGeomPrimvarsAPI& api)
 {
     TfTokenVector texCoordPrimvarNames;
     for (const UsdGeomPrimvar& primvar : api.GetPrimvarsWithAuthoredValues()) {
@@ -293,67 +325,105 @@ findPrimaryTextureCoordinatePrimvar(const UsdGeomPrimvarsAPI& api)
         if (typeName == SdfValueTypeNames->TexCoord2fArray ||
             typeName == SdfValueTypeNames->Float2Array) {
             TfToken primvarName = primvar.GetPrimvarName();
-            // We always take 'st' as the default primvar if it exists
-            if (primvarName == AdobeTokens->st) {
-                return AdobeTokens->st;
-            }
             texCoordPrimvarNames.push_back(primvarName);
         }
     }
-    // If we didn't find 'st' we use the first valid texture coordinate
-    TfToken result = texCoordPrimvarNames.empty() ? TfToken() : texCoordPrimvarNames[0];
-    // ... and warn if we had multiple choices.
     if (texCoordPrimvarNames.size() > 1) {
-        std::stringstream ss;
-        bool first = true;
-        for (const TfToken& primvarName : texCoordPrimvarNames) {
-            if (first) {
-                first = false;
+        // If there is more than one primvar name (token), we need to return a sorted list of
+        // tokens. The sort is based on first separating the non-numeric part and numeric parts of
+        // the token string and then using the parts for comparison. The  list to tokens is then
+        // updated based on the sort.
+        struct Item
+        {
+            TfToken token;
+            std::string prefix;
+            int number;
+        };
+        std::vector<Item> sortables;
+        sortables.reserve(texCoordPrimvarNames.size());
+        for (auto token : texCoordPrimvarNames) {
+            std::string str = token.GetString();
+            auto index = str.find_first_of("0123456789");
+            if (index == std::string::npos) {
+                // We want to ensure that if the token "st" appears in the list, it will always be
+                // placed at the front of the sorted list. This is easily done by using an empty
+                // string as a primary key comparitor for the token.
+                if (str == "st")
+                    sortables.push_back(Item{ token, "", -1 });
+                else
+                    sortables.push_back(Item{ token, str, -1 });
             } else {
-                ss << ", ";
+                int val = parseIntEnding(str.substr(index));
+                if (val < 0)
+                    sortables.push_back(Item{ token, str, -1 });
+                else
+                    sortables.push_back(Item{ token, str.substr(0, index), val });
             }
-            ss << primvarName;
         }
+        std::sort(sortables.begin(), sortables.end(), [](Item& a, Item& b) {
+            return a.prefix < b.prefix || (a.prefix == b.prefix && a.number < b.number);
+        });
 
-        TF_WARN("Mesh %s has multiple UV coordinates: [%s]. Using %s for export",
-                api.GetPrim().GetPath().GetText(),
-                ss.str().c_str(),
-                result.GetText());
+        for (size_t i = 0; i < texCoordPrimvarNames.size(); ++i) {
+            texCoordPrimvarNames[i] = sortables[i].token;
+        }
     }
-    return result;
+
+    return texCoordPrimvarNames;
 }
 
 bool
-readMeshData(ReadLayerContext& ctx, Mesh& mesh, int meshIndex, const UsdPrim& prim)
+readMeshOrPointsData(ReadLayerContext& ctx, Mesh& mesh, int meshIndex, const UsdPrim& prim)
 {
     ctx.materialBindings.push_back("");
     ctx.subsetMaterialBindings.push_back({});
 
     mesh.name = prim.GetName();
-    UsdGeomMesh usdMesh(prim);
-    UsdGeomPrimvarsAPI primvarsAPI(usdMesh);
+    UsdGeomPrimvarsAPI primvarsAPI(prim);
 
-    usdMesh.GetDoubleSidedAttr().Get(&mesh.doubleSided);
-    usdMesh.GetFaceVertexCountsAttr().Get(&mesh.faces, 0);
-    usdMesh.GetFaceVertexIndicesAttr().Get(&mesh.indices, 0);
-    usdMesh.GetPointsAttr().Get(&mesh.points, 0);
-    usdMesh.GetSubdivisionSchemeAttr().Get(&mesh.subdivisionScheme, 0);
+    if (prim.IsA<UsdGeomMesh>()) {
+        UsdGeomMesh usdMesh(prim);
+        usdMesh.GetDoubleSidedAttr().Get(&mesh.doubleSided);
+        usdMesh.GetFaceVertexCountsAttr().Get(&mesh.faces, 0);
+        usdMesh.GetFaceVertexIndicesAttr().Get(&mesh.indices, 0);
+        usdMesh.GetPointsAttr().Get(&mesh.points, 0);
+        usdMesh.GetSubdivisionSchemeAttr().Get(&mesh.subdivisionScheme, 0);
 
-    UsdAttribute normalsAttr = usdMesh.GetNormalsAttr();
-    if (readPrimvar(primvarsAPI, UsdGeomTokens->normals, mesh.normals)) {
-    } else if (normalsAttr.IsAuthored()) {
-        normalsAttr.Get(&mesh.normals.values, 0);
-        mesh.normals.interpolation = usdMesh.GetNormalsInterpolation();
+        UsdAttribute normalsAttr = usdMesh.GetNormalsAttr();
+        if (readPrimvar(primvarsAPI, UsdGeomTokens->normals, mesh.normals)) {
+        } else if (normalsAttr.IsAuthored()) {
+            normalsAttr.Get(&mesh.normals.values, 0);
+            mesh.normals.interpolation = usdMesh.GetNormalsInterpolation();
+        }
+    } else if (prim.IsA<UsdGeomPoints>()) {
+        UsdGeomPoints usdPoints(prim);
+        usdPoints.GetPointsAttr().Get(&mesh.points, 0);
+        usdPoints.GetWidthsAttr().Get(&mesh.pointWidths, 0);
+        UsdAttribute normalsAttr = usdPoints.GetNormalsAttr();
+        if (readPrimvar(primvarsAPI, UsdGeomTokens->normals, mesh.normals)) {
+        } else if (normalsAttr.IsAuthored()) {
+            normalsAttr.Get(&mesh.normals.values, 0);
+            mesh.normals.interpolation = usdPoints.GetNormalsInterpolation();
+        }
+    } else {
+        TF_CODING_ERROR("Shouldn't reach here. Prim %s is neither a mesh nor points.",
+                        mesh.name.c_str());
+        return false;
     }
 
-    TfToken primvaryTexCoordPrimvar = findPrimaryTextureCoordinatePrimvar(primvarsAPI);
-    if (primvaryTexCoordPrimvar.IsEmpty()) {
+    TfTokenVector uvTokens = findTextureCoordinatePrimvars(primvarsAPI);
+
+    if (uvTokens.empty()) {
         TF_WARN("No texture coordinates for mesh %s", prim.GetPath().GetText());
     } else {
-        readPrimvar(primvarsAPI, primvaryTexCoordPrimvar, mesh.uvs);
+        readPrimvar(primvarsAPI, uvTokens[0], mesh.uvs);
+        for (size_t i = 1; i < uvTokens.size(); ++i) {
+            mesh.extraUVSets.push_back(Primvar<GfVec2f>());
+            readPrimvar(primvarsAPI, uvTokens[i], mesh.extraUVSets[i - 1]);
+        }
     }
 
-    Primvar<PXR_NS::GfVec3f> displayColor;
+    Primvar<GfVec3f> displayColor;
     Primvar<float> displayOpacity;
     readPrimvar(primvarsAPI, UsdGeomTokens->primvarsDisplayColor, displayColor);
     readPrimvar(primvarsAPI, UsdGeomTokens->primvarsDisplayOpacity, displayOpacity);
@@ -375,44 +445,107 @@ readMeshData(ReadLayerContext& ctx, Mesh& mesh, int meshIndex, const UsdPrim& pr
     if (material) {
         ctx.materialBindings[meshIndex] = material.GetPath().GetString();
     }
-    UsdShadeMaterialBindingAPI::BindingsCache bindingsCache;
-    UsdShadeMaterialBindingAPI::CollectionQueryCache collQueryCache;
-    UsdPrimSiblingRange children =
-      prim.GetFilteredChildren(UsdTraverseInstanceProxies(UsdPrimAllPrimsPredicate));
-    for (const UsdPrim& child : children) {
-        if (child.IsA<UsdGeomSubset>()) {
-            ctx.subsetMaterialBindings.back().push_back("");
-            const auto& materialBinding = UsdShadeMaterialBindingAPI(child);
-            const auto& material = materialBinding.ComputeBoundMaterial();
-            auto [subsetIndex, subset] = ctx.usd->addSubset(meshIndex);
-            UsdGeomSubset usdSubset = UsdGeomSubset(child);
-            usdSubset.GetIndicesAttr().Get(&subset.faces);
-            if (material) {
-                ctx.subsetMaterialBindings[meshIndex][subsetIndex] = material.GetPath().GetString();
+
+    if (prim.IsA<UsdGeomMesh>()) {
+        UsdShadeMaterialBindingAPI::BindingsCache bindingsCache;
+        UsdShadeMaterialBindingAPI::CollectionQueryCache collQueryCache;
+        UsdPrimSiblingRange children =
+          prim.GetFilteredChildren(UsdTraverseInstanceProxies(UsdPrimAllPrimsPredicate));
+        for (const UsdPrim& child : children) {
+            if (child.IsA<UsdGeomSubset>()) {
+                ctx.subsetMaterialBindings.back().push_back("");
+                const auto& materialBinding = UsdShadeMaterialBindingAPI(child);
+                const auto& material = materialBinding.ComputeBoundMaterial();
+                auto [subsetIndex, subset] = ctx.usd->addSubset(meshIndex);
+                UsdGeomSubset usdSubset = UsdGeomSubset(child);
+                usdSubset.GetIndicesAttr().Get(&subset.faces);
+                if (material) {
+                    ctx.subsetMaterialBindings[meshIndex][subsetIndex] =
+                      material.GetPath().GetString();
+                }
             }
         }
-    }
 
-    if (ctx.options->triangulate) {
-        triangulateMesh(mesh);
-        // Separate flag for this?
-        forceVertexInterpolation(mesh);
-    }
+        if (ctx.options->triangulate) {
+            if (!triangulateMesh(mesh)) {
+                return false;
+            }
+            // Separate flag for this?
+            forceVertexInterpolation(mesh);
+        }
 
-    // After reading the geometry subsets and potentially triangulating and expanding the mesh to
-    // force vertex interpolation we pre-compute a set of face vertex indices for each subset that
-    // index into the points buffer of the main mesh
-    for (Subset& subset : mesh.subsets) {
-        // Compute the face vertex indices of the subset based on the face indices that define the
-        // subset
-        computeFaceVertexIndicesForSubset(mesh.faces, mesh.indices, subset.faces, subset.indices);
+        // After reading the geometry subsets and potentially triangulating and expanding the mesh
+        // to force vertex interpolation we pre-compute a set of face vertex indices for each subset
+        // that index into the points buffer of the main mesh
+        for (Subset& subset : mesh.subsets) {
+            // Compute the face vertex indices of the subset based on the face indices that define
+            // the subset
+            computeFaceVertexIndicesForSubset(
+              mesh.faces, mesh.indices, subset.faces, subset.indices);
+        }
+    } else if (prim.IsA<UsdGeomPoints>()) {
+        mesh.asPoints = true;
+
+        // Check if the point cloud is a Gaussian splat, it is a Gaussian splat as long as it has
+        // all the basic tokens.
+        mesh.asGsplats = true;
+        for (const TfToken& gsToken : AdobeGsplatBaseTokens->allTokens) {
+            if (!primvarsAPI.HasPrimvar(gsToken)) {
+                mesh.asGsplats = false;
+                break;
+            }
+        }
+
+        if (mesh.asGsplats) {
+            for (const TfToken& gsToken : AdobeGsplatBaseTokens->allTokens) {
+                if (gsToken == AdobeGsplatBaseTokens->rot) {
+                    // Rotation token: 'rot'.
+                    readPrimvar(primvarsAPI, gsToken, mesh.pointRotations);
+                    if (!mesh.pointRotations.values.size()) {
+                        TF_WARN("Invalid values for rot in Gaussian splat %s",
+                                prim.GetPath().GetText());
+                        mesh.asGsplats = false;
+                        break;
+                    }
+                } else if (gsToken.GetString()[0] == 'w') {
+                    // Width-related tokens: 'widths', 'widths1', and 'widths2'.
+                    Primvar<float> extraWidths;
+                    readPrimvar(primvarsAPI, gsToken, extraWidths);
+                    if (extraWidths.values.size()) {
+                        auto [extraPointWidthSetIndex, extraPointWidthSet] =
+                          ctx.usd->addExtraPointWidthSet(meshIndex);
+                        extraPointWidthSet.indices = extraWidths.indices;
+                        extraPointWidthSet.values = extraWidths.values;
+                        extraPointWidthSet.interpolation = extraWidths.interpolation;
+                    } else {
+                        TF_WARN("Invalid values for %s in Gaussian splat %s",
+                                gsToken.GetText(),
+                                prim.GetPath().GetText());
+                        mesh.asGsplats = false;
+                        break;
+                    }
+                }
+            }
+            for (const TfToken& gsToken : AdobeGsplatSHTokens->allTokens) {
+                // SH-related tokens: fRest0 -- fRest44.
+                Primvar<float> shCoeffs;
+                readPrimvar(primvarsAPI, gsToken, shCoeffs);
+                if (shCoeffs.values.size()) {
+                    auto [pointSHCoeffSetIndex, pointSHCoeffSet] =
+                      ctx.usd->addPointSHCoeffSet(meshIndex);
+                    pointSHCoeffSet.indices = shCoeffs.indices;
+                    pointSHCoeffSet.values = shCoeffs.values;
+                    pointSHCoeffSet.interpolation = shCoeffs.interpolation;
+                }
+            }
+        }
     }
 
     return true;
 }
 
 bool
-readSkinData(ReadLayerContext& ctx, Mesh& mesh, const PXR_NS::UsdSkelSkinningQuery& skinningQuery)
+readSkinData(ReadLayerContext& ctx, Mesh& mesh, const UsdSkelSkinningQuery& skinningQuery)
 {
     skinningQuery.ComputeJointInfluences(&mesh.joints, &mesh.weights);
     mesh.geomBindTransform = skinningQuery.GetGeomBindTransform();
@@ -439,9 +572,9 @@ readSkinData(ReadLayerContext& ctx, Mesh& mesh, const PXR_NS::UsdSkelSkinningQue
 }
 
 bool
-readMesh(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
+readMeshOrPoints(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
 {
-    const std::string& path = prim.GetPrimInPrototype().GetPath().GetString();
+    std::string path = prim.GetPrimInPrototype().GetPath().GetString();
     if (prim.IsInstanceProxy()) {
         auto it = ctx.prototypes.find(path);
         if (it != ctx.prototypes.end()) {
@@ -460,7 +593,10 @@ readMesh(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
     Node& node = getParentOrNewTransformParent(ctx, prim, parent, "MeshTransform");
     node.staticMeshes.push_back(meshIndex);
 
-    readMeshData(ctx, mesh, meshIndex, prim);
+    if (!readMeshOrPointsData(ctx, mesh, meshIndex, prim)) {
+        return false;
+    }
+
     if (prim.IsInstanceProxy()) {
         ctx.prototypes[path] = meshIndex;
         mesh.instanceable = true;
@@ -477,6 +613,10 @@ readMesh(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
 // * several skinning targets (only UsdGeomMesh)
 // The discovery of the associated prims is done via queries from the Skeleton API,
 // instead of visiting children and checking manually, because it's easier and standard.
+//
+// XXX Because we aren't visiting children manually, this does mean we might miss other nodes added
+// to a SkelRoot, if such nodes exist. If no tools output such nodes within SkelRots, this may be
+// acceptable.
 //
 // The data is dumped into the following in the UsdData cache:
 // * an Animation struct
@@ -500,22 +640,23 @@ readSkelRoot(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
     node.name = prim.GetName().GetString();
     node.path = prim.GetPath().GetString();
 
-    PXR_NS::UsdSkelCache skelCache; // to hoist later to see performance improvement
-    PXR_NS::UsdSkelRoot skelRoot(prim);
-    skelCache.Populate(skelRoot, PXR_NS::UsdTraverseInstanceProxies());
-    std::vector<PXR_NS::UsdSkelBinding> bindings;
-    skelCache.ComputeSkelBindings(skelRoot, &bindings, PXR_NS::UsdTraverseInstanceProxies());
-    for (const PXR_NS::UsdSkelBinding& binding : bindings) {
+    UsdSkelCache skelCache; // to hoist later to see performance improvement
+    UsdSkelRoot skelRoot(prim);
+    skelCache.Populate(skelRoot, UsdTraverseInstanceProxies());
+    std::vector<UsdSkelBinding> bindings;
+    skelCache.ComputeSkelBindings(skelRoot, &bindings, UsdTraverseInstanceProxies());
+    for (const UsdSkelBinding& binding : bindings) {
 
         // Process skeleton data
         auto [skeletonIndex, skeleton] = ctx.usd->addSkeleton();
         const UsdSkelSkeleton& skelSkeleton = binding.GetSkeleton();
         const UsdSkelSkeletonQuery& skelQuery = skelCache.GetSkelQuery(skelSkeleton);
         const UsdSkelTopology& topology = skelQuery.GetTopology();
+        skeleton.parent = parent;
         skeleton.joints = skelQuery.GetJointOrder();
         skelSkeleton.GetRestTransformsAttr().Get(&skeleton.restTransforms, 0);
         skelSkeleton.GetBindTransformsAttr().Get(&skeleton.bindTransforms, 0);
-        skeleton.parents.resize(skeleton.joints.size());
+        skeleton.jointParents.resize(skeleton.joints.size());
         skeleton.inverseBindTransforms.resize(skeleton.joints.size());
         for (unsigned int i = 0; i < skeleton.joints.size(); i++) {
             TF_DEBUG_MSG(FILE_FORMAT_UTIL,
@@ -523,64 +664,109 @@ readSkelRoot(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
                          ctx.debugTag.c_str(),
                          "SkelJoint",
                          skeleton.joints[i].GetText());
-            skeleton.parents[i] = topology.GetParent(i);
+            skeleton.jointParents[i] = topology.GetParent(i);
             skeleton.inverseBindTransforms[i] = skeleton.bindTransforms[i].GetInverse();
             // printMatrix("Bind matrix " + std::to_string(i), skeleton.bindTransforms[i]);
             // printMatrix("Inverse bind matrix " + std::to_string(i),
             // skeleton.inverseBindTransforms[i]);
         }
-        printSkeleton("layer::read", prim.GetPath(), skeleton, ctx.debugTag);
+
+        const UsdPrim& skeletonPrim = skelSkeleton.GetPrim();
+        skeleton.name = skeletonPrim.GetName().GetString();
+        printSkeleton("layer::read", skeletonPrim.GetPath(), skeleton, ctx.debugTag);
 
         // Process skinning targets
-        GfMatrix4d skelRootTransform = ctx.xformCache.GetLocalToWorldTransform(prim);
-        GfMatrix4d inverseSkelRootTransform = skelRootTransform.GetInverse();
         const VtArray<UsdSkelSkinningQuery>& targets = binding.GetSkinningTargets();
-        skeleton.targets.resize(targets.size());
+        skeleton.meshSkinningTargets.resize(targets.size());
         for (unsigned int i = 0; i < targets.size(); i++) {
             const UsdSkelSkinningQuery& skinningQuery = targets[i];
-            const PXR_NS::UsdPrim& meshPrim = skinningQuery.GetPrim();
-            if (meshPrim.IsA<PXR_NS::UsdGeomMesh>()) {
+            const UsdPrim& meshPrim = skinningQuery.GetPrim();
+            if (meshPrim.IsA<UsdGeomMesh>()) {
                 auto [meshIndex, mesh] = ctx.usd->addMesh();
                 readSkinData(ctx, mesh, skinningQuery);
-                readMeshData(ctx, mesh, meshIndex, meshPrim);
-
-                GfMatrix4d localToWorld = ctx.xformCache.GetLocalToWorldTransform(meshPrim);
-                GfMatrix4d localToSkelRoot = inverseSkelRootTransform * localToWorld;
-                transformMesh(mesh, localToSkelRoot);
+                readMeshOrPointsData(ctx, mesh, meshIndex, meshPrim);
 
                 printMesh("layer::read", mesh, ctx.debugTag);
-                skeleton.targets[i] = meshIndex;
-                node.skinnedMeshes[skeletonIndex].push_back(meshIndex);
+                skeleton.meshSkinningTargets[i] = meshIndex;
+
+                // Add skeleton/mesh to the node.skinnedMeshes vector as well.
+                // This is redundant info with skeleton.meshSkinningTargets & skeleton.parent
+                // but it helps the exporters to be able to have this info present on the node.
+                int searchIndex = skeletonIndex;
+                auto it = std::find_if(node.skinnedMeshes.begin(),
+                                       node.skinnedMeshes.end(),
+                                       [searchIndex](const auto& skinnedMesh) {
+                                           return skinnedMesh.first == searchIndex;
+                                       });
+                if (it == node.skinnedMeshes.end()) {
+                    std::pair<int, std::vector<int>> skinnedMesh;
+                    skinnedMesh.first = skeletonIndex;
+                    skinnedMesh.second.push_back(meshIndex);
+                    node.skinnedMeshes.push_back(std::move(skinnedMesh));
+                } else {
+                    it->second.push_back(meshIndex);
+                }
             }
         }
 
         // Process animation data
         int boneCount = skeleton.restTransforms.size();
-        const PXR_NS::UsdSkelAnimQuery& skelAnimQuery = skelQuery.GetAnimQuery();
-        std::vector<double> times;
-        skelAnimQuery.GetJointTransformTimeSamples(&times);
-        if (times.size()) {
-            auto [animationIndex, animation] = ctx.usd->addAnimation();
-            skeleton.animations.push_back(animationIndex);
-            unsigned int timesCount = times.size();
-            animation.times.resize(timesCount);
-            animation.translations.resize(timesCount);
-            animation.rotations.resize(timesCount);
-            animation.scales.resize(timesCount);
-            for (unsigned int i = 0; i < timesCount; i++) {
-                animation.times[i] = times[i];
-                animation.translations[i].resize(boneCount);
-                animation.rotations[i].resize(boneCount);
-                animation.scales[i].resize(boneCount);
-                PXR_NS::VtMatrix4dArray transforms;
-                if (!skelQuery.ComputeJointLocalTransforms(&transforms, times[i])) {
-                    continue;
+        const UsdSkelAnimQuery& skelAnimQuery = skelQuery.GetAnimQuery();
+        if (skelAnimQuery.IsValid()) {
+            std::vector<double> times;
+            skelAnimQuery.GetJointTransformTimeSamples(&times);
+            if (times.size()) {
+                ctx.usd->hasAnimations = true;
+
+                // The SkelAnimQuery may return joints not in the skeleton. Compute the intersection
+                // of this joint array and the skeleton's joint array
+                // Also, keep track of which animated joints are present in the skeleton, so that we
+                // can identify which animated transforms are relevant.
+                VtTokenArray allAnimatedJoints = skelAnimQuery.GetJointOrder();
+                std::vector<bool> animatedJointPresent(allAnimatedJoints.size());
+                int allAnimatedJointIndex = -1;
+                for (const TfToken& joint : allAnimatedJoints) {
+                    allAnimatedJointIndex++;
+                    if (std::find(skeleton.joints.begin(), skeleton.joints.end(), joint) !=
+                        skeleton.joints.end()) {
+                        animatedJointPresent[allAnimatedJointIndex] = true;
+                        skeleton.animatedJoints.push_back(joint);
+                    }
                 }
-                for (int j = 0; j < boneCount; j++) {
-                    PXR_NS::UsdSkelDecomposeTransform(transforms[j],
-                                                      &animation.translations[i][j],
-                                                      &animation.rotations[i][j],
-                                                      &animation.scales[i][j]);
+
+                skeleton.skeletonAnimations.resize(1);
+                SkeletonAnimation& animation = skeleton.skeletonAnimations.front();
+                unsigned int timesCount = times.size();
+                animation.times.resize(timesCount);
+                animation.translations.resize(timesCount);
+                animation.rotations.resize(timesCount);
+                animation.scales.resize(timesCount);
+                for (unsigned int i = 0; i < timesCount; i++) {
+                    VtMatrix4dArray transforms;
+                    if (!skelAnimQuery.ComputeJointLocalTransforms(&transforms, times[i])) {
+                        continue;
+                    }
+
+                    animation.times[i] = times[i];
+                    animation.translations[i].reserve(skeleton.animatedJoints.size());
+                    animation.rotations[i].reserve(skeleton.animatedJoints.size());
+                    animation.scales[i].reserve(skeleton.animatedJoints.size());
+
+                    // Add all transforms to the SkeletonAnimation as long as the transforms are
+                    // for a joint referred to by skeleton.animatedJoints
+                    for (int j = 0; j < transforms.size(); j++) {
+                        if (animatedJointPresent[j]) {
+                            GfVec3f translation;
+                            GfQuatf rotation;
+                            GfVec3h scale;
+                            UsdSkelDecomposeTransform(
+                              transforms[j], &translation, &rotation, &scale);
+
+                            animation.translations[i].push_back(translation);
+                            animation.rotations[i].push_back(rotation);
+                            animation.scales[i].push_back(scale);
+                        }
+                    }
                 }
             }
         }
@@ -589,6 +775,7 @@ readSkelRoot(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
                  "%s: layer::read skelRoot end %s\n",
                  ctx.debugTag.c_str(),
                  prim.GetPath().GetText());
+
     return true;
 }
 
@@ -739,9 +926,9 @@ readImage(ReadLayerContext& ctx, const SdfAssetPath& path, int& index)
     if (extension.length() > 1 && extension.back() == ']') {
         extension = extension.substr(0, extension.size() - 1);
     }
-    const std::string& absPath = path.GetResolvedPath().empty()
-                                   ? PXR_NS::ArGetResolver().Resolve(path.GetAssetPath())
-                                   : path.GetResolvedPath();
+    std::string absPath = path.GetResolvedPath().empty()
+                            ? ArGetResolver().Resolve(path.GetAssetPath())
+                            : path.GetResolvedPath();
     if (const auto& it = ctx.images.find(uri); it != ctx.images.end()) {
         index = it->second;
         TF_DEBUG_MSG(
@@ -818,80 +1005,180 @@ getShaderInputValue(const UsdShadeShader& shader, const TfToken& name, T& value)
     return false;
 }
 
+// Fetches the first value-producing attribute connected to a given shader input.
+// If 'expectShader' is true, verify that the connected source is a shader and that the connection
+// exists. Returns true and sets outAttribute if a suitable attribute is found.
+bool
+fetchPrimaryConnectedAttribute(const UsdShadeInput& shadeInput,
+                               UsdAttribute& outAttribute,
+                               bool expectShader)
+{
+    if (expectShader) {
+        if (!shadeInput.HasConnectedSource()) {
+            TF_WARN("Input %s has no connected source.", shadeInput.GetFullName().GetText());
+            return false;
+        }
+    }
+    UsdShadeAttributeVector attrs = shadeInput.GetValueProducingAttributes();
+    if (attrs.empty()) {
+        return false;
+    }
+    if (attrs.size() > 1) {
+        TF_WARN("Input %s is connected to multiple producing attributes, only the first will be "
+                "processed.",
+                shadeInput.GetFullName().GetText());
+    }
+    outAttribute = attrs[0];
+    if (expectShader) {
+        UsdShadeAttributeType attrType = UsdShadeUtils::GetType(outAttribute.GetName());
+        if (attrType == UsdShadeAttributeType::Input) {
+            TF_WARN("Input %s is connected to an attribute that is not a shader.",
+                    shadeInput.GetFullName().GetText());
+            return false;
+        }
+    }
+    return true;
+}
+
+// Handle texture-related shader inputs such as file paths and wrapping modes.
+void
+handleTextureShader(ReadLayerContext& ctx, const UsdShadeShader& shader, Input& input)
+{
+    SdfAssetPath assetPath;
+    if (getShaderInputValue(shader, AdobeTokens->file, assetPath)) {
+        readImage(ctx, assetPath, input.image);
+    }
+    getShaderInputValue(shader, AdobeTokens->wrapS, input.wrapS);
+    getShaderInputValue(shader, AdobeTokens->wrapT, input.wrapT);
+    getShaderInputValue(shader, AdobeTokens->minFilter, input.minFilter);
+    getShaderInputValue(shader, AdobeTokens->magFilter, input.magFilter);
+    getShaderInputValue(shader, AdobeTokens->scale, input.scale);
+    getShaderInputValue(shader, AdobeTokens->bias, input.bias);
+    getShaderInputValue(shader, AdobeTokens->sourceColorSpace, input.colorspace);
+
+    // Default to 0th UVs unless overridden in handlePrimvarReader
+    input.uvIndex = 0;
+}
+
+UsdShadeShader
+handleTransformShader(ReadLayerContext& ctx, const UsdShadeShader& shader, Input& input)
+{
+
+    UsdShadeShader nextShader;
+    getShaderInputValue(shader, AdobeTokens->rotation, input.transformRotation);
+    getShaderInputValue(shader, AdobeTokens->scale, input.transformScale);
+    getShaderInputValue(shader, AdobeTokens->translation, input.transformTranslation);
+
+    UsdShadeInput stInputCoordReader = shader.GetInput(AdobeTokens->in);
+    UsdAttribute stSourcesInner;
+    if (fetchPrimaryConnectedAttribute(stInputCoordReader, stSourcesInner, true)) {
+        nextShader = UsdShadeShader(stSourcesInner.GetPrim());
+    }
+    return nextShader;
+}
+
+void
+handlePrimvarReader(ReadLayerContext& ctx, const UsdShadeShader& shader, Input& input)
+{
+    TfToken texCoordPrimvar;
+    std::string texCoordPrimvarStr;
+    getShaderInputValue(shader, AdobeTokens->varname, texCoordPrimvarStr);
+
+    // Supports both string and token type values for the varname
+    // string is the correct type, but token was added to support slightly
+    // incorrect assets.
+    if (!texCoordPrimvarStr.empty()) {
+        texCoordPrimvar = TfToken(texCoordPrimvarStr);
+    } else {
+        getShaderInputValue(shader, AdobeTokens->varname, texCoordPrimvar);
+    }
+    int uvIndex = getSTPrimvarTokenIndex(texCoordPrimvar);
+    if (uvIndex >= 0) {
+        input.uvIndex = uvIndex;
+    } else {
+        TF_WARN("Texture reader %s is reading primvar %s. Only 'st' or 'st1'..'stN' is supported",
+                shader.GetPrim().GetPath().GetText(),
+                texCoordPrimvar.GetText());
+    }
+}
+
 void
 readInput(ReadLayerContext& ctx, const UsdShadeShader& surface, const TfToken& name, Input& input)
 {
     UsdShadeInput shadeInput = surface.GetInput(name);
-    if (!shadeInput)
+    if (!shadeInput) {
         return;
+    }
 
-    if (shadeInput.HasConnectedSource()) {
+    UsdAttribute attr;
+    if (fetchPrimaryConnectedAttribute(shadeInput, attr, false)) {
         UsdShadeSourceInfoVector sources = shadeInput.GetConnectedSources();
-        if (sources.empty()) {
-            return;
-        }
-        // We do not handle multiple input connections, so we only process the first source
-        UsdShadeConnectionSourceInfo source = sources[0];
 
-        UsdShadeShader textureReadShader(source.source.GetPrim());
-        TfToken infoIdToken;
-        textureReadShader.GetShaderId(&infoIdToken);
-        if (infoIdToken != AdobeTokens->UsdUVTexture) {
-            return;
-        }
-
-        // The name of the output on the texture reader determines which channel(s) of the
-        // texture we read
-        input.channel = source.sourceName;
-
-        SdfAssetPath assetPath;
-        if (getShaderInputValue(textureReadShader, AdobeTokens->file, assetPath)) {
-            readImage(ctx, assetPath, input.image);
-        }
-        getShaderInputValue(textureReadShader, AdobeTokens->wrapS, input.wrapS);
-        getShaderInputValue(textureReadShader, AdobeTokens->wrapT, input.wrapT);
-        getShaderInputValue(textureReadShader, AdobeTokens->scale, input.scale);
-        getShaderInputValue(textureReadShader, AdobeTokens->bias, input.bias);
-        getShaderInputValue(textureReadShader, AdobeTokens->sourceColorSpace, input.colorspace);
-
-        // Currently we always use the 0th UVs
-        input.uvIndex = 0;
-
-        // Gather information about UV coordinates used
-        UsdShadeInput stInput = textureReadShader.GetInput(AdobeTokens->st);
-        UsdShadeSourceInfoVector stSources = stInput.GetConnectedSources();
-        if (!stSources.empty()) {
-            UsdShadeConnectionSourceInfo stSource = stSources[0];
-            UsdShadeShader stShader(stSource.source.GetPrim());
-            stShader.GetShaderId(&infoIdToken);
-            if (infoIdToken == AdobeTokens->UsdTransform2d) {
-                // Extract the UV transform parameters
-                getShaderInputValue(stShader, AdobeTokens->rotation, input.transformRotation);
-                getShaderInputValue(stShader, AdobeTokens->scale, input.transformScale);
-                getShaderInputValue(stShader, AdobeTokens->translation, input.transformTranslation);
-
-                // Get the connection for the UV reader
-                UsdShadeSourceInfoVector stSources = shadeInput.GetConnectedSources();
-                if (!stSources.empty()) {
-                    UsdShadeConnectionSourceInfo stSource = stSources[0];
-                    stShader = UsdShadeShader(stSource.source.GetPrim());
-                    stShader.GetShaderId(&infoIdToken);
-                }
+        // Attempt to retrieve the constant value from the attribute.
+        auto [shadingAttrName, attrType] = UsdShadeUtils::GetBaseNameAndType(attr.GetName());
+        if (attrType == UsdShadeAttributeType::Input) {
+            if (!attr.Get(&input.value)) {
+                TF_WARN("Failed to get constant value for input %s", name.GetText());
+                return;
             }
-            // This is not an "else if", since we can move the stShader if we encounter a UV
-            // transform
-            if (infoIdToken == AdobeTokens->UsdPrimvarReader_float2) {
-                TfToken texCoordPrimvar;
-                getShaderInputValue(stShader, AdobeTokens->varname, texCoordPrimvar);
-                if (texCoordPrimvar != AdobeTokens->st) {
-                    TF_WARN("Texture reader %s is reading primvar %s. Only 'st' is supported",
-                            stShader.GetPrim().GetPath().GetText(),
-                            texCoordPrimvar.GetText());
+        } else {
+            // Process the shader connected to this attribute
+            UsdShadeShader connectedShader(attr.GetPrim());
+            TfToken shaderId;
+            connectedShader.GetShaderId(&shaderId);
+
+            if (shaderId == AdobeTokens->UsdUVTexture) {
+                handleTextureShader(ctx, connectedShader, input);
+
+                UsdShadeInput stInput = connectedShader.GetInput(AdobeTokens->st);
+
+                // The name of the output on the texture reader determines which channel(s) of the
+                // texture we read.
+                input.channel = shadingAttrName;
+
+                // Process the connected source of the 'st' input.
+                if (fetchPrimaryConnectedAttribute(stInput, attr, true)) {
+                    VtValue srcValue;
+                    if (attr.Get(&srcValue)) {
+                        TF_WARN(
+                          "Texture read shader does not support a fixed UV value for input %s",
+                          name.GetText());
+                    } else {
+                        // Handle the shader connected to the UV coordinate.
+                        UsdShadeShader stShader(attr.GetPrim());
+                        stShader.GetShaderId(&shaderId);
+
+                        if (shaderId == AdobeTokens->UsdTransform2d) {
+                            UsdShadeShader nextShader = handleTransformShader(ctx, stShader, input);
+                            if (nextShader) {
+                                stShader = nextShader;
+                                stShader.GetShaderId(&shaderId);
+                            }
+                        }
+
+                        // This is not an "else if", since we can move the stShader
+                        // if we encounter a UV transform.
+                        if (shaderId == AdobeTokens->UsdPrimvarReader_float2) {
+                            handlePrimvarReader(ctx, stShader, input);
+                        } else {
+                            TF_WARN("Unsupported shader type %s for UV input %s",
+                                    shaderId.GetText(),
+                                    name.GetText());
+                        }
+                    }
+                } else {
+                    TF_WARN("Failed to fetch connected attribute for UV input %s", name.GetText());
                 }
+            } else {
+                TF_WARN(
+                  "Unsupported shader type %s for input %s", shaderId.GetText(), name.GetText());
             }
         }
     } else {
-        getShaderInputValue(surface, name, input.value);
+        // If no connections were found, get the shader's input value directly
+        if (!getShaderInputValue(surface, name, input.value)) {
+            TF_WARN("Failed to get input value for %s", name.GetText());
+        }
     }
 }
 
@@ -934,6 +1221,15 @@ _readClearcoatModelsTransmissionTint(const UsdShadeShader& surface)
 }
 
 bool
+_readUnlit(const UsdShadeShader& surface)
+{
+    bool value = false;
+    // Check for a custom attribute that carries an indicator where the clearcoat came from
+    surface.GetPrim().GetAttribute(AdobeTokens->unlit).Get(&value);
+    return value;
+}
+
+bool
 readASMMaterial(ReadLayerContext& ctx, Material& material, const UsdShadeShader& surface)
 {
     TfToken infoIdToken;
@@ -943,6 +1239,7 @@ readASMMaterial(ReadLayerContext& ctx, Material& material, const UsdShadeShader&
     }
 
     material.clearcoatModelsTransmissionTint = _readClearcoatModelsTransmissionTint(surface);
+    material.isUnlit = _readUnlit(surface);
 
     // Note, we currently only support fixed values for emissiveIntensity and sheenOpacity
     // No texture support yet.
@@ -971,6 +1268,7 @@ readASMMaterial(ReadLayerContext& ctx, Material& material, const UsdShadeShader&
     readInput(ctx, surface, AdobeTokens->specularLevel, material.specularLevel);
     readInput(ctx, surface, AdobeTokens->specularEdgeColor, material.specularColor);
     readInput(ctx, surface, AdobeTokens->normal, material.normal);
+    readInput(ctx, surface, AdobeTokens->normalScale, material.normalScale);
     readInput(ctx, surface, AdobeTokens->height, material.displacement);
     readInput(ctx, surface, AdobeTokens->anisotropyLevel, material.anisotropyLevel);
     readInput(ctx, surface, AdobeTokens->anisotropyAngle, material.anisotropyAngle);
@@ -998,7 +1296,7 @@ readASMMaterial(ReadLayerContext& ctx, Material& material, const UsdShadeShader&
     readInput(ctx, surface, AdobeTokens->coatSpecularLevel, material.clearcoatSpecular);
     readInput(ctx, surface, AdobeTokens->coatNormal, material.clearcoatNormal);
     readInput(ctx, surface, AdobeTokens->ambientOcclusion, material.occlusion);
-    readInput(ctx, surface, AdobeTokens->volumeThickness, material.thickness);
+    readInput(ctx, surface, AdobeTokens->volumeThickness, material.volumeThickness);
 
     return true;
 }
@@ -1047,10 +1345,185 @@ readCamera(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
     camera.nearZ = clippingRange.GetMin();
     camera.farZ = clippingRange.GetMax();
     camera.camera = gfCamera;
+    camera.fStop = gfCamera.GetFStop();
+    camera.focusDistance = gfCamera.GetFocusDistance();
     TF_DEBUG_MSG(FILE_FORMAT_UTIL,
                  "%s: layer::read camera { %s }\n",
                  ctx.debugTag.c_str(),
                  prim.GetName().GetText());
+    return true;
+}
+
+bool
+readLight(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
+{
+    auto [lightIndex, light] = ctx.usd->addLight();
+    Node& parentNode = getParentOrNewTransformParent(ctx, prim, parent, "LightTransform");
+    parentNode.light = lightIndex;
+
+    light.name = prim.GetName();
+
+    if (prim.IsA<UsdLuxDiskLight>()) {
+        light.type = LightType::Disk;
+        const UsdLuxDiskLight usdLight(prim);
+        bool hasShapingAPI = prim.HasAPI<UsdLuxShapingAPI>();
+
+        // Color
+        if (!usdLight.GetColorAttr().Get(&light.color)) {
+            TF_WARN("When reading USD layers, failed to read color of disk light %s",
+                    light.name.c_str());
+        }
+
+        // Intensity
+        if (!usdLight.GetIntensityAttr().Get(&light.intensity)) {
+            TF_WARN("When reading USD layers, failed to read intensity of disk light %s",
+                    light.name.c_str());
+        }
+
+        // Radius
+        if (!usdLight.GetRadiusAttr().Get(&light.radius)) {
+            TF_WARN("When reading USD layers, failed to read radius of disk light %s",
+                    light.name.c_str());
+        }
+
+        if (hasShapingAPI) {
+            const UsdLuxShapingAPI usdShapingAPI(prim);
+
+            // Cone Angle
+            if (!usdShapingAPI.GetShapingConeAngleAttr().Get(&light.coneAngle)) {
+                TF_WARN("When reading USD layers, failed to read cone angle of disk light %s",
+                        light.name.c_str());
+            }
+
+            // Cone Falloff
+            if (!usdShapingAPI.GetShapingConeSoftnessAttr().Get(&light.coneFalloff)) {
+                TF_WARN("When reading USD layers, failed to read cone falloff of disk light %s",
+                        light.name.c_str());
+            }
+        } else {
+            TF_WARN("When reading USD layers, disk light %s has no shaping API. Ignoring cone "
+                    "angle and falloff",
+                    light.name.c_str());
+        }
+
+        TF_DEBUG_MSG(FILE_FORMAT_UTIL,
+                     "%s: layer::read disk light { %s }\n",
+                     ctx.debugTag.c_str(),
+                     prim.GetName().GetText());
+    } else if (prim.IsA<UsdLuxRectLight>()) {
+        light.type = LightType::Rectangle;
+        const UsdLuxRectLight usdLight(prim);
+
+        // Color
+        if (!usdLight.GetColorAttr().Get(&light.color)) {
+            TF_WARN("When reading USD layers, failed to read color of rectangle light %s",
+                    light.name.c_str());
+        }
+
+        // Intensity
+        if (!usdLight.GetIntensityAttr().Get(&light.intensity)) {
+            TF_WARN("When reading USD layers, failed to read intensity of rectangle light %s",
+                    light.name.c_str());
+        }
+
+        // Length (width)
+        if (!usdLight.GetWidthAttr().Get(&light.length[0])) {
+            TF_WARN("When reading USD layers, failed to read width of rectangle light %s",
+                    light.name.c_str());
+        }
+
+        // Length (height)
+        if (!usdLight.GetHeightAttr().Get(&light.length[1])) {
+            TF_WARN("When reading USD layers, failed to read height of rectangle light %s",
+                    light.name.c_str());
+        }
+
+        TF_DEBUG_MSG(FILE_FORMAT_UTIL,
+                     "%s: layer::read rectangle light { %s }\n",
+                     ctx.debugTag.c_str(),
+                     prim.GetName().GetText());
+    } else if (prim.IsA<UsdLuxSphereLight>()) {
+        light.type = LightType::Sphere;
+        const UsdLuxSphereLight usdLight(prim);
+
+        // Color
+        if (!usdLight.GetColorAttr().Get(&light.color)) {
+            TF_WARN("When reading USD layers, failed to read color of sphere light %s",
+                    light.name.c_str());
+        }
+
+        // Intensity
+        if (!usdLight.GetIntensityAttr().Get(&light.intensity)) {
+            TF_WARN("When reading USD layers, failed to read intensity of sphere light %s",
+                    light.name.c_str());
+        }
+
+        // Radius
+        if (!usdLight.GetRadiusAttr().Get(&light.radius)) {
+            TF_WARN("When reading USD layers, failed to read radius of sphere light %s",
+                    light.name.c_str());
+        }
+
+        TF_DEBUG_MSG(FILE_FORMAT_UTIL,
+                     "%s: layer::read sphere light { %s }\n",
+                     ctx.debugTag.c_str(),
+                     prim.GetName().GetText());
+    } else if (prim.IsA<UsdLuxDomeLight>()) {
+        light.type = LightType::Environment;
+        const UsdLuxDomeLight usdLight(prim);
+
+        // Color
+        if (!usdLight.GetColorAttr().Get(&light.color)) {
+            TF_WARN("When reading USD layers, failed to read color of dome light %s",
+                    light.name.c_str());
+        }
+
+        // Intensity
+        if (!usdLight.GetIntensityAttr().Get(&light.intensity)) {
+            TF_WARN("When reading USD layers, failed to read intensity of dome light %s",
+                    light.name.c_str());
+        }
+
+        // TODO: Add support for texture
+
+        TF_DEBUG_MSG(FILE_FORMAT_UTIL,
+                     "%s: layer::read dome light { %s }\n",
+                     ctx.debugTag.c_str(),
+                     prim.GetName().GetText());
+    } else if (prim.IsA<UsdLuxDistantLight>()) {
+        light.type = LightType::Sun;
+        UsdLuxDistantLight usdLight(prim);
+
+        // Color
+        if (!usdLight.GetColorAttr().Get(&light.color)) {
+            TF_WARN("When reading USD layers, failed to read color of distant light %s",
+                    light.name.c_str());
+        }
+
+        // Intensity
+        if (!usdLight.GetIntensityAttr().Get(&light.intensity)) {
+            TF_WARN("When reading USD layers, failed to read intensity of distant light %s",
+                    light.name.c_str());
+        }
+
+        // Angle
+        if (!usdLight.GetAngleAttr().Get(&light.angle)) {
+            TF_WARN("When reading USD layers, failed to read angle of distant light %s",
+                    light.name.c_str());
+        }
+
+        TF_DEBUG_MSG(FILE_FORMAT_UTIL,
+                     "%s: layer::read rectangle light { %s }\n",
+                     ctx.debugTag.c_str(),
+                     prim.GetName().GetText());
+    } else {
+        TF_WARN(
+          "Expected a supported light, but instead encountered a prim at \"%s\" of type \"%s\"\n",
+          prim.GetPath().GetText(),
+          prim.GetTypeName().GetText());
+
+        return false;
+    }
     return true;
 }
 
@@ -1072,8 +1545,8 @@ readPrim(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
         f = readScope;
     else if (prim.IsA<UsdGeomXform>())
         f = readNode;
-    else if (prim.IsA<UsdGeomMesh>())
-        f = readMesh;
+    else if (prim.IsA<UsdGeomMesh>() || prim.IsA<UsdGeomPoints>())
+        f = readMeshOrPoints;
     else if (prim.IsA<UsdSkelRoot>())
         f = readSkelRoot;
     else if (prim.IsA<UsdShadeMaterial>())
@@ -1084,6 +1557,8 @@ readPrim(ReadLayerContext& ctx, const UsdPrim& prim, int parent)
         f = readPointInstancer;
     else if (prim.IsA<UsdVolVolume>())
         f = readVolume;
+    else if (prim.IsA<UsdLuxBoundableLightBase>() || prim.IsA<UsdLuxNonboundableLightBase>())
+        f = readLight;
     else
         f = readUnknown;
     return f(ctx, prim, parent);
@@ -1153,6 +1628,173 @@ resolveMaterialBindings(ReadLayerContext& ctx)
     }
 }
 
+void
+readAnimationTracks(UsdData& usd)
+{
+    if (!usd.hasAnimations) {
+        return;
+    }
+
+    // Read the animation tracks from the dict
+    if (VtDictionaryIsHolding<VtDictionary>(usd.metadata, "animationTracks")) {
+        const VtDictionary& tracksDictionary =
+          VtDictionaryGet<VtDictionary>(usd.metadata, "animationTracks");
+
+        const std::string minTimeKey("minTime");
+        const std::string maxTimeKey("maxTime");
+        const std::string offsetKey("offset");
+
+        for (auto i : tracksDictionary) {
+            if (!i.second.IsHolding<VtDictionary>()) {
+                break;
+            }
+
+            const std::string& name = i.first;
+            const VtDictionary& dict = i.second.UncheckedGet<VtDictionary>();
+
+            if (!VtDictionaryIsHolding<float>(dict, minTimeKey) ||
+                !VtDictionaryIsHolding<float>(dict, maxTimeKey) ||
+                !VtDictionaryIsHolding<float>(dict, offsetKey)) {
+                break;
+            }
+
+            AnimationTrack track;
+            track.name = name;
+            track.minTime = VtDictionaryGet<float>(dict, minTimeKey);
+            track.maxTime = VtDictionaryGet<float>(dict, maxTimeKey);
+            track.offsetToJoinedTimeline = VtDictionaryGet<float>(dict, offsetKey);
+
+            usd.animationTracks.emplace_back(std::move(track));
+        }
+    }
+
+    // If the dict is not found, read the first animation track from the string. This case can
+    // happen if the USD file was imported without explicitly setting the fbxAnimationStacks or
+    // gltfAnimationTracks parameter.
+    if (usd.animationTracks.empty() &&
+        VtDictionaryIsHolding<std::string>(usd.metadata, "defaultAnimationTrack")) {
+        const std::string& name =
+          VtDictionaryGet<std::string>(usd.metadata, "defaultAnimationTrack");
+
+        AnimationTrack track;
+        track.name = name;
+        usd.animationTracks.emplace_back(std::move(track));
+    }
+
+    // Sort by offsetToJoinedTimeline to preserve the track ordering
+    std::sort(usd.animationTracks.begin(),
+              usd.animationTracks.end(),
+              [](const AnimationTrack& a, const AnimationTrack& b) {
+                  return a.offsetToJoinedTimeline > b.offsetToJoinedTimeline;
+              });
+
+    // If we couldn't find any tracks in the metadata, create one track by default
+    if (usd.animationTracks.empty()) {
+        AnimationTrack track;
+        track.name = "Animation";
+        usd.animationTracks.push_back(track);
+    }
+}
+
+void
+splitAnimationTracks(UsdData& usd)
+{
+    if (usd.animationTracks.size() <= 1) {
+        // We don't have multiple tracks. Nothing to do!
+        return;
+    }
+
+    // Split NodeAnimations
+    for (Node& node : usd.nodes) {
+        if (node.animations.empty()) {
+            continue;
+        }
+
+        // First, duplicate the animation data
+        NodeAnimation mainAnimation = std::move(node.animations.front());
+
+        // Create an animation for each track, clearing out the first track
+        node.animations.front() = {};
+        node.animations.resize(usd.animationTracks.size());
+
+        // For each track, filter all timepoints that are within range
+        for (int animationTrackIndex = 0; animationTrackIndex < usd.animationTracks.size();
+             animationTrackIndex++) {
+            AnimationTrack& track = usd.animationTracks[animationTrackIndex];
+            float mainMinTime = track.minTime + track.offsetToJoinedTimeline;
+            float mainMaxTime = track.maxTime + track.offsetToJoinedTimeline;
+
+            auto filterTimeValues = [&track, mainMinTime, mainMaxTime](const auto& srcTimeValues,
+                                                                       auto& dstTimeValues) {
+                int t = 0;
+
+                for (const float time : srcTimeValues.times) {
+                    if (srcTimeValues.values.size() <= t) {
+                        break;
+                    }
+
+                    if (time >= mainMinTime && time <= mainMaxTime) {
+                        track.hasTimepoints = true;
+                        dstTimeValues.values.push_back(srcTimeValues.values[t]);
+                        dstTimeValues.times.push_back(time - track.offsetToJoinedTimeline);
+                    }
+
+                    t++;
+                }
+            };
+
+            NodeAnimation& nodeAnimation = node.animations[animationTrackIndex];
+            filterTimeValues(mainAnimation.translations, nodeAnimation.translations);
+            filterTimeValues(mainAnimation.rotations, nodeAnimation.rotations);
+            filterTimeValues(mainAnimation.scales, nodeAnimation.scales);
+        }
+    }
+
+    // Split SkeletonAnimations
+
+    for (Skeleton& skeleton : usd.skeletons) {
+        std::vector<SkeletonAnimation> splitSkeletonAnimations;
+
+        for (SkeletonAnimation& skeletonAnimation : skeleton.skeletonAnimations) {
+            for (int animationTrackIndex = 0; animationTrackIndex < usd.animationTracks.size();
+                 animationTrackIndex++) {
+                AnimationTrack& track = usd.animationTracks[animationTrackIndex];
+                float mainMinTime = track.minTime + track.offsetToJoinedTimeline;
+                float mainMaxTime = track.maxTime + track.offsetToJoinedTimeline;
+
+                splitSkeletonAnimations.push_back(SkeletonAnimation());
+                SkeletonAnimation& filteredAnimation = splitSkeletonAnimations.back();
+
+                int t = 0;
+                for (const float time : skeletonAnimation.times) {
+                    if (skeletonAnimation.translations.size() <= t ||
+                        skeletonAnimation.rotations.size() <= t ||
+                        skeletonAnimation.scales.size() <= t) {
+                        break;
+                    }
+
+                    if (time >= mainMinTime && time <= mainMaxTime) {
+                        track.hasTimepoints = true;
+
+                        filteredAnimation.times.push_back(time - track.offsetToJoinedTimeline);
+                        filteredAnimation.translations.push_back(skeletonAnimation.translations[t]);
+                        filteredAnimation.rotations.push_back(skeletonAnimation.rotations[t]);
+                        filteredAnimation.scales.push_back(skeletonAnimation.scales[t]);
+                    }
+
+                    t++;
+                }
+            }
+        }
+
+        skeleton.skeletonAnimations = splitSkeletonAnimations;
+    }
+
+    // XXX Should we remove tracks with no animations present? If we do this we'll need to
+    // remove the corresponding NodeAnimations and SkeletonAnimations. We can only get such tracks
+    // if some other tool is adding the track metadata. Our importers will not do this.
+}
+
 bool
 readLayer(const ReadLayerOptions& options,
           const SdfLayer& constLayer,
@@ -1160,7 +1802,7 @@ readLayer(const ReadLayerOptions& options,
           const std::string& debugTag)
 {
     TF_DEBUG_MSG(FILE_FORMAT_UTIL, "%s: layer::read Start\n", debugTag.c_str());
-    auto layer = PXR_NS::SdfCreateNonConstHandle<PXR_NS::SdfLayer>(&constLayer);
+    auto layer = SdfCreateNonConstHandle<SdfLayer>(&constLayer);
     auto stage = UsdStage::Open(layer);
     ReadLayerContext ctx;
     ctx.stage = stage;
@@ -1189,6 +1831,11 @@ readLayer(const ReadLayerOptions& options,
             readPrim(ctx, rootPrim, -1);
         }
     }
+
+    readAnimationTracks(usd);
+
+    splitAnimationTracks(usd);
+
     resolveMaterialBindings(ctx);
     TF_DEBUG_MSG(FILE_FORMAT_UTIL, "%s: layer::read End\n", ctx.debugTag.c_str());
 

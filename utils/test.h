@@ -19,6 +19,8 @@ governing permissions and limitations under the License.
 
 #include "api.h"
 #include <pxr/pxr.h>
+#include <pxr/base/tf/diagnostic.h>
+#include <pxr/base/tf/diagnosticMgr.h>
 #include <pxr/usd/usdGeom/xform.h>
 #include <pxr/usd/usdGeom/mesh.h>
 #include <pxr/usd/usdGeom/points.h>
@@ -79,6 +81,9 @@ PXR_NAMESPACE_CLOSE_SCOPE
 #define ASSERT_MESH(...) assertMesh(__VA_ARGS__)
 #define ASSERT_POINTS(...) assertPoints(__VA_ARGS__)
 #define ASSERT_MATERIAL(...) assertMaterial(__VA_ARGS__)
+#define ASSERT_ANIMATION(...) assertAnimation(__VA_ARGS__)
+#define ASSERT_CAMERA(...) assertCamera(__VA_ARGS__)
+#define ASSERT_LIGHT(...) assertLight(__VA_ARGS__)
 #ifdef DO_RENDER
     #define ASSERT_RENDER(...) assertRender(__VA_ARGS__)
 #else
@@ -142,12 +147,124 @@ struct USDFFUTILS_API MaterialData {
     InputData displacement;
     InputData occlusion;
     InputData ior;
+    InputData anisotropyAngle;
+    InputData anisotropyLevel;
 };
 
+struct USDFFUTILS_API AnimationData
+{
+    std::map<float, PXR_NS::GfQuatf> orient;
+    std::map<float, PXR_NS::GfVec3f> scale;
+    std::map<float, PXR_NS::GfVec3f> translate;
+};
+
+struct USDFFUTILS_API CameraData
+{
+    PXR_NS::GfQuatf orient;
+    PXR_NS::GfVec3f scale;
+    PXR_NS::GfVec3f translate;
+
+    PXR_NS::GfVec2f clippingRange;
+    float focalLength;
+    float focusDistance;
+    float fStop;
+    float horizontalAperture;
+    std::string projection;
+    float verticalAperture;
+};
+
+struct USDFFUTILS_API LightData
+{
+    // Light transformation data
+    PXR_NS::GfVec3d translation = { 0, 0, 0 };
+    PXR_NS::GfQuatf rotation = { 0, 0, 0, 0 };
+    PXR_NS::GfVec3f scale = { 0, 0, 0 };
+
+    // Light data
+    PXR_NS::GfVec3f color = { 0, 0, 0 };
+    float intensity = 0;
+    float coneAngle = 0;
+
+    float coneFalloff = 0;
+
+    // Add these in when we support importing lights that use these
+    // PXR_NS::GfVec2f length
+    // float radius
+    // ImageAsset texture
+};
 USDFFUTILS_API void assertPrim(PXR_NS::UsdStageRefPtr stage, const std::string& path);
 USDFFUTILS_API void assertNode(PXR_NS::UsdStageRefPtr stage, const std::string& path);
 USDFFUTILS_API void assertMesh(PXR_NS::UsdStageRefPtr stage, const std::string& path, const MeshData& data);
 USDFFUTILS_API void assertPoints(PXR_NS::UsdStageRefPtr stage, const std::string& path, const PointsData& data);
 USDFFUTILS_API void assertMaterial(PXR_NS::UsdStageRefPtr stage, const std::string& path, const MaterialData& data);
+USDFFUTILS_API void
+assertAnimation(PXR_NS::UsdStageRefPtr stage, const std::string& path, const AnimationData& data);
+USDFFUTILS_API void
+assertCamera(PXR_NS::UsdStageRefPtr stage, const std::string& path, const CameraData& data);
+USDFFUTILS_API void
+assertLight(PXR_NS::UsdStageRefPtr stage, const std::string& path, const LightData& data);
 
 USDFFUTILS_API void assertRender(const std::string& filename, const std::string& imageFilename);
+
+template<class T>
+bool
+extractUsdAttribute(PXR_NS::UsdPrim prim,
+                    PXR_NS::TfToken attributeName,
+                    T* value,
+                    PXR_NS::UsdTimeCode time = PXR_NS::UsdTimeCode::Default())
+{
+    PXR_NS::UsdAttribute attribute = prim.GetAttribute(attributeName);
+
+    PXR_NS::UsdGeomXformOp xForm(attribute);
+    return xForm.Get<T>(value, time);
+}
+
+// Class to catch messages from the USD library
+class UsdDiagnosticDelegate : public PXR_NS::TfDiagnosticMgr::Delegate {
+public:
+    UsdDiagnosticDelegate() {
+        PXR_NS::TfDiagnosticMgr::GetInstance().AddDelegate(this);
+    }
+
+    ~UsdDiagnosticDelegate() override {
+        PXR_NS::TfDiagnosticMgr::GetInstance().RemoveDelegate(this);
+    }
+
+    void IssueError(const PXR_NS::TfError &err) override {
+        m_errors.push_back(err.GetCommentary());
+    }
+
+    void IssueFatalError(PXR_NS::TfCallContext const &context, std::string const &msg) override {
+        m_fatalErrors.push_back(msg);
+    }
+
+    void IssueStatus(const PXR_NS::TfStatus &status) override {
+        m_statuses.push_back(status.GetCommentary());
+    }
+
+    void IssueWarning(const PXR_NS::TfWarning &warning) override {
+        m_warnings.push_back(warning.GetCommentary());
+    }
+
+    const std::vector<std::string>& GetErrors() const {
+        return m_errors;
+    }
+
+    const std::vector<std::string>& GetFatalErrors() const {
+        return m_fatalErrors;
+    }
+
+    const std::vector<std::string>& GetStatuses() const {
+        return m_statuses;
+    }
+
+    const std::vector<std::string>& GetWarnings() const {
+        return m_warnings;
+    }
+
+private:
+    std::vector<std::string> m_errors;
+    std::vector<std::string> m_fatalErrors;
+    std::vector<std::string> m_statuses;
+    std::vector<std::string> m_warnings;
+};

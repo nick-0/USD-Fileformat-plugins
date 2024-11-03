@@ -1,6 +1,19 @@
+/*
+Copyright 2023 Adobe. All rights reserved.
+This file is licensed to you under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License. You may obtain a copy
+of the License at http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under
+the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR REPRESENTATIONS
+OF ANY KIND, either express or implied. See the License for the specific language
+governing permissions and limitations under the License.
+*/
 #include "neuralAssetsHelper.h"
 
-#include <vector>
+#include <algorithm>
+#include <cstdlib>
+#include <limits>
 #include <zlib.h>
 
 namespace adobe::usd {
@@ -70,7 +83,9 @@ float16ToFloat32(const std::uint16_t h)
 }
 
 bool
-decompress(const uint8_t* inputData, size_t inLen, std::vector<uint8_t>& decompressedData)
+decompress(const std::uint8_t* inputData,
+           std::size_t inLen,
+           std::vector<std::uint8_t>& decompressedData)
 {
     if (!inLen) {
         return false;
@@ -87,8 +102,8 @@ decompress(const uint8_t* inputData, size_t inLen, std::vector<uint8_t>& decompr
     }
 
     int ret;
-    const size_t bufferSize = 4096; // Temporary buffer size
-    std::vector<uint8_t> buffer(bufferSize);
+    const std::size_t bufferSize = 4096; // Temporary buffer size
+    std::vector<std::uint8_t> buffer(bufferSize);
 
     // Decompress the data.
     do {
@@ -106,7 +121,7 @@ decompress(const uint8_t* inputData, size_t inLen, std::vector<uint8_t>& decompr
                 return false;
         }
 
-        size_t have = bufferSize - strm.avail_out;
+        std::size_t have = bufferSize - strm.avail_out;
         decompressedData.insert(decompressedData.end(), buffer.begin(), buffer.begin() + have);
     } while (ret != Z_STREAM_END);
 
@@ -116,7 +131,7 @@ decompress(const uint8_t* inputData, size_t inLen, std::vector<uint8_t>& decompr
 }
 
 bool
-compress(const uint8_t* inputData, size_t inLen, std::vector<uint8_t>& outputData)
+compress(const std::uint8_t* inputData, std::size_t inLen, std::vector<std::uint8_t>& outputData)
 {
     if (!inLen) {
         return false;
@@ -137,8 +152,8 @@ compress(const uint8_t* inputData, size_t inLen, std::vector<uint8_t>& outputDat
         return false;
     }
 
-    const size_t bufferSize = 4096;
-    std::vector<uint8_t> buffer(bufferSize);
+    const std::size_t bufferSize = 4096;
+    std::vector<std::uint8_t> buffer(bufferSize);
 
     int ret;
     do {
@@ -156,7 +171,7 @@ compress(const uint8_t* inputData, size_t inLen, std::vector<uint8_t>& outputDat
                 return false;
         }
 
-        size_t have = bufferSize - strm.avail_out;
+        std::size_t have = bufferSize - strm.avail_out;
         outputData.insert(outputData.end(), buffer.begin(), buffer.begin() + have);
     } while (strm.avail_out == 0);
 
@@ -181,7 +196,8 @@ float32ToFloat16(const float* inputData, std::uint16_t* outputData, std::size_t 
 }
 
 template<typename T>
-T maxOfFloatArray(const T* inputData, std::size_t numElements)
+T
+maxOfFloatArray(const T* inputData, std::size_t numElements)
 {
     T fMax = -std::numeric_limits<T>::max();
     for (std::size_t i = 0; i < numElements; ++i)
@@ -190,11 +206,12 @@ T maxOfFloatArray(const T* inputData, std::size_t numElements)
 }
 
 template<typename T>
-T infNormOfFloatArray(const T* inputData, std::size_t numElements)
+T
+infNormOfFloatArray(const T* inputData, std::size_t numElements)
 {
     T fMax = static_cast<T>(0.0);
     for (std::size_t i = 0; i < numElements; ++i)
-        fMax = std::max(fMax, fabs(inputData[i]));
+        fMax = std::max(fMax, std::abs(inputData[i]));
     return fMax;
 }
 
@@ -244,12 +261,12 @@ getNerfExtString()
     return "ADOBE_nerf_asset";
 }
 
-template float
+template USDFFUTILS_API float
 maxOfFloatArray<float>(const float* inputData, std::size_t numElements);
-template double
+template USDFFUTILS_API double
 maxOfFloatArray<double>(const double* inputData, std::size_t numElements);
-template float
+template USDFFUTILS_API float
 infNormOfFloatArray<float>(const float* inputData, std::size_t numElements);
-template double
+template USDFFUTILS_API double
 infNormOfFloatArray<double>(const double* inputData, std::size_t numElements);
 }

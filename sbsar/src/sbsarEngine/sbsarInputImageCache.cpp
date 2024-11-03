@@ -13,6 +13,8 @@ governing permissions and limitations under the License.
 #include <sbsarEngine/sbsarInputImageCache.h>
 #include <sbsarEngine/sbsarRenderThread.h>
 
+#include <config/sbsarConfig.h>
+
 #include <pxr/base/tf/diagnosticLite.h>
 #include <pxr/imaging/hio/image.h>
 
@@ -160,7 +162,7 @@ toInputImage(const HioImageSharedPtr& img)
 void
 _cleanCache(InputImageCache& inputImageCache)
 {
-    TF_DEBUG(SBSAR_RENDER).Msg("AssetCache: Cleaning cache\n");
+    TF_DEBUG(SBSAR_RENDER).Msg("InputImageCache: Cleaning cache\n");
     // Sort input image by creation time and delete the oldest 10%.
     std::chrono::time_point<std::chrono::steady_clock> oldtestTimeToRemove;
     std::map<std::chrono::time_point<std::chrono::steady_clock>, std::size_t> timeSizeMap;
@@ -223,7 +225,7 @@ _loadAndAddInputImageData(InputImageCache& inputImageCache, const std::string& r
     inputImageCache.size += size;
     ++getCacheStats().inputImageCreated;
 
-    if (inputImageCache.size > getCacheSize().getMaxInputImageCacheSize())
+    if (inputImageCache.size > getSbsarConfig()->getInputImageCacheSize())
         _cleanCache(inputImageCache);
 
     return hash;

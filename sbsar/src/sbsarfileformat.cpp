@@ -116,6 +116,9 @@ SBSARFileFormat::CreateLayerData(const SdfAbstractDataRefPtr& sdfDataPtr,
 
     // Create all prim
     SdfPath defaultPrimPath;
+    // Create a class prim for the materials in the package
+    SdfPath classPath;
+
     for (const SubstanceAir::GraphDesc& graphDesc : packageDesc->getGraphs()) {
         TF_DEBUG(FILE_FORMAT_SBSAR)
           .Msg("SBSARFileFormat:Read graph: %s\n", graphDesc.mLabel.c_str());
@@ -123,29 +126,37 @@ SBSARFileFormat::CreateLayerData(const SdfAbstractDataRefPtr& sdfDataPtr,
         const MappedSymbol graphName = symbolMapper.GetSymbol(getGraphName(graphDesc));
         GraphType graphType = guessGraphType(graphDesc);
         SdfPath primPath;
+
         if (graphType == GraphType::Material) {
+            if (classPath.IsEmpty()) {
+                classPath = addClassPrim(sdfData, TfToken("_class_sbsarMaterial"));
+
+                // Mark class prim as active=false, so that it is discarded when the stage is
+                // flattened
+                setPrimMetadata(sdfData, classPath, SdfFieldKeys->Active, VtValue(false));
+            }
+
             primPath = addMaterialPrim(sdfData,
                                        graphName,
                                        graphDesc,
                                        resolvedPath,
+                                       classPath,
                                        sbsarHash,
                                        symbolMapper,
                                        sbsarData);
         } else if (graphType == GraphType::Light) {
-            primPath = addLuxDomeLight(sdfData,
-                                       graphName,
-                                       graphDesc,
-                                       resolvedPath,
-                                       sbsarHash,
-                                       symbolMapper,
-                                       sbsarData);
+            primPath = addLuxDomeLight(
+              sdfData, graphName, graphDesc, resolvedPath, sbsarHash, symbolMapper, sbsarData);
         }
 
         if (graphDesc.mThumbnail.size() > 0 && primPath.IsEmpty() == false) {
             SdfAssetPath thumbnailPath(resolvedPath + "[thumbnails/" + graphName.usdName + ".png]");
-            VtDictionary  thumbnails;
+            VtDictionary thumbnails;
             thumbnails[UsdMediaTokens->defaultImage] = thumbnailPath;
-            sdfData->SetDictValueByKey(primPath, SdfFieldKeys->AssetInfo, UsdMediaTokens->previewThumbnailsDefault, VtValue(thumbnails));
+            sdfData->SetDictValueByKey(primPath,
+                                       SdfFieldKeys->AssetInfo,
+                                       UsdMediaTokens->previewThumbnailsDefault,
+                                       VtValue(thumbnails));
             prependApiSchema(sdfData, primPath, UsdMediaTokens->AssetPreviewsAPI);
         }
 
@@ -169,12 +180,14 @@ parseFileFormatArguments(const SBSARFileFormat::FileFormatArguments& args)
     auto depth = args.find("depth");
     if (depth != args.end()) {
         data.depth = std::stoi(depth->second);
-    }
-    else {
+    } else {
         data.depth = 0;
     }
 
     argReadBool(args, "writeMaterialX", data.writeMaterialX, "SBSAR");
+    argReadBool(args, "writeASM", data.writeASM, "SBSAR");
+    argReadBool(args, "writeUsdPreviewSurface", data.writeUsdPreviewSurface, "SBSAR");
+
     return data;
 }
 
@@ -182,7 +195,9 @@ bool
 SBSARFileFormat::Read(SdfLayer* layer, const std::string& resolvedPath, bool metadataOnly) const
 {
     TF_DEBUG(FILE_FORMAT_SBSAR)
-      .Msg("SBSARFileFormat::Read, resolvedPath: %s\n", resolvedPath.c_str());
+      .Msg("SBSARFileFormat::Read, layerIdentifier: %s, resolvedPath: %s\n",
+           layer->GetIdentifier().c_str(),
+           resolvedPath.c_str());
     if (!TF_VERIFY(layer)) {
         return false;
     }
@@ -208,14 +223,13 @@ SBSARFileFormat::ComposeFieldsForFileFormatArguments(const std::string& assetPat
                                                      VtValue* dependencyContextData) const
 {
     TF_DEBUG(FILE_FORMAT_SBSAR)
-      .Msg("SBSARFileFormat::ComposeFieldsForFileFormatArguments: asset path : "
-           "%s\n",
+      .Msg("SBSARFileFormat::ComposeFieldsForFileFormatArguments: asset path : %s\n",
            assetPath.c_str());
+    std::string sbsarPath;
+    FileFormatArguments arguments;
+    SdfLayer::SplitIdentifier(assetPath, &sbsarPath, &arguments);
 
-    std::string delimiter = ":";
-    std::string resolvedPath = assetPath.substr(0, assetPath.find(":SDF_FORMAT_ARGS"));
-
-    ParameterListPtr sbsarParameters = getParameterListFromPackageCache(resolvedPath);
+    ParameterListPtr sbsarParameters = getParameterListFromPackageCache(sbsarPath);
     SymbolMapper symbolMapper;
     VtDictionary dict;
     for (const SubstanceAir::InputDescBase* parameter : *sbsarParameters) {
@@ -235,6 +249,13 @@ SBSARFileFormat::ComposeFieldsForFileFormatArguments(const std::string& assetPat
                 std::size_t hash = addImageToInputImageCache(resolvedImageAssetPath);
                 dict[parameterName] = VtValue(hash);
             } else {
+                // Color values in USD are in linear space, but color inputs for a Substance graph
+                // are (usually) in sRGB space. So we convert the incoming value from USD to sRGB
+                // space. Note that we do the inverse transform when extracting the default value
+                // from the graph to provide it to USD.
+                if (parameter->mGuiWidget == SubstanceAir::InputWidget::Input_Color) {
+                    convertColorLinearToSRGB(paramValue);
+                }
                 dict[parameterName] = paramValue;
             }
         }

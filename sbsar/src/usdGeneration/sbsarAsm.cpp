@@ -18,6 +18,8 @@ governing permissions and limitations under the License.
 #include <sdfMaterialUtils.h>
 #include <sdfUtils.h>
 
+#include <pxr/usd/usdShade/tokens.h>
+
 using namespace SubstanceAir;
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -44,6 +46,8 @@ struct BindInfo
 
 static std::map<std::string, BindInfo> _materialMapBindings = {
     { "baseColor", { "baseColor", SdfValueTypeNames->Color3f, "rgb", AdobeTokens->sRGB } },
+    { "absorptionColor",
+      { "absorptionColor", SdfValueTypeNames->Color3f, "rgb", AdobeTokens->sRGB } },
     { "normal", { "normal", SdfValueTypeNames->Float3, "rgb", AdobeTokens->raw } },
     { "roughness", { "roughness", SdfValueTypeNames->Float, "r", AdobeTokens->raw } },
     { "metallic", { "metallic", SdfValueTypeNames->Float, "r", AdobeTokens->raw } },
@@ -64,10 +68,11 @@ static std::map<std::string, BindInfo> _materialMapBindings = {
     { "coatSpecularLevel",
       { "coatSpecularLevel", SdfValueTypeNames->Float, "r", AdobeTokens->raw } },
     { "translucency", { "translucency", SdfValueTypeNames->Float, "r", AdobeTokens->raw } },
+    { "scatteringColor",
+      { "scatteringColor", SdfValueTypeNames->Color3f, "rgb", AdobeTokens->sRGB } },
     { "scatteringDistanceScale",
       { "scatteringDistanceScale", SdfValueTypeNames->Color3f, "rgb", AdobeTokens->sRGB } },
-    { "emissive",
-      { "emissive", SdfValueTypeNames->Color3f, "rgb", AdobeTokens->sRGB } },
+    { "emissive", { "emissive", SdfValueTypeNames->Color3f, "rgb", AdobeTokens->sRGB } },
 };
 
 SdfPath
@@ -104,11 +109,11 @@ addUsdAsmShaderImpl(SdfAbstractData* sdfData,
 {
     TF_DEBUG(FILE_FORMAT_SBSAR).Msg("addUsdAsmShaderImpl: Adding ASM Implementation\n");
 
-    // Create a scope for the ASM implementation
-    // XXX for correctness reasons this should be a NodeGraph prim, but the old SBSAR code uses an
-    // untyped prim
+    // Create a NodeGraph for the ASM implementation
     SdfPath scopePath =
-      createPrimSpec(sdfData, materialPath, AdobeTokens->ASM /*, UsdShadeTokens->NodeGraph*/);
+      createPrimSpec(sdfData, materialPath, AdobeTokens->ASM, UsdShadeTokens->NodeGraph);
+
+    SdfPath uvChannelNamePath = inputPath(materialPath, uv_channel_name);
 
     // Create Texcoord Reader
     SdfPath txOutputPath = createShader(sdfData,
@@ -116,8 +121,8 @@ addUsdAsmShaderImpl(SdfAbstractData* sdfData,
                                         _tokens->TexCoordReader,
                                         AdobeTokens->UsdPrimvarReader_float2,
                                         "result",
-                                        { { "varname", AdobeTokens->st } });
-
+                                        {},
+                                        { { "varname", uvChannelNamePath } });
 #ifdef USDSBSAR_ENABLE_TEXTURE_TRANSFORM
     SdfPath uvScaleInputPath = inputPath(materialPath, uv_scale_input);
     SdfPath uvRotationInputPath = inputPath(materialPath, uv_rotation_input);
@@ -142,6 +147,8 @@ addUsdAsmShaderImpl(SdfAbstractData* sdfData,
     // Create texture sampling nodes
     InputConnections inputConnections;
     for (auto& usage : mapped_usages) {
+        TF_DEBUG(FILE_FORMAT_SBSAR)
+          .Msg("addUsdAsmShaderImpl: Looking for usage : '%s'\n", usage.c_str());
         if (hasUsage(usage, graphDesc)) {
             auto it = mapBindings.find(usage);
             if (it != mapBindings.end()) {

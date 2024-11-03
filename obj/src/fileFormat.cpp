@@ -30,8 +30,9 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 using namespace adobe::usd;
 
-const TfToken UsdObjFileFormat::assetsPathToken("objAssetsPath");
-const TfToken UsdObjFileFormat::phongToken("objPhong");
+const TfToken UsdObjFileFormat::assetsPathToken("objAssetsPath", TfToken::Immortal);
+const TfToken UsdObjFileFormat::phongToken("objPhong", TfToken::Immortal);
+const TfToken UsdObjFileFormat::originalColorSpaceToken("objOriginalColorSpace", TfToken::Immortal);
 
 TF_DEFINE_PUBLIC_TOKENS(UsdObjFileFormatTokens, USDOBJ_FILE_FORMAT_TOKENS);
 TF_REGISTRY_FUNCTION(TfType)
@@ -61,6 +62,7 @@ UsdObjFileFormat::InitData(const FileFormatArguments& args) const
     argReadBool(args, AdobeTokens->writeMaterialX.GetText(), pd->writeMaterialX, DEBUG_TAG);
     argReadString(args, assetsPathToken.GetText(), pd->assetsPath, DEBUG_TAG);
     argReadBool(args, phongToken.GetText(), pd->phong, DEBUG_TAG);
+    argReadString(args, originalColorSpaceToken.GetText(), pd->originalColorSpace, DEBUG_TAG);
     return pd;
 }
 void
@@ -71,6 +73,7 @@ UsdObjFileFormat::ComposeFieldsForFileFormatArguments(const std::string& assetPa
 {
     argComposeString(context, args, assetsPathToken, DEBUG_TAG);
     argComposeBool(context, args, phongToken, DEBUG_TAG);
+    argComposeString(context, args, originalColorSpaceToken, DEBUG_TAG);
 }
 
 bool
@@ -96,6 +99,7 @@ UsdObjFileFormat::Read(SdfLayer* layer, const std::string& resolvedPath, bool me
     TfStopwatch w;
     w.Start();
     TF_DEBUG_MSG(FILE_FORMAT_OBJ, "Read: %s\n", resolvedPath.c_str());
+    std::string fileType = getFileExtension(resolvedPath, DEBUG_TAG);
     SdfAbstractDataRefPtr layerData = InitData(layer->GetFileFormatArguments());
     ObjDataConstPtr data = TfDynamic_cast<const ObjDataConstPtr>(layerData);
     UsdData usd;
@@ -109,10 +113,11 @@ UsdObjFileFormat::Read(SdfLayer* layer, const std::string& resolvedPath, bool me
     WriteLayerOptions layerOptions;
     layerOptions.writeMaterialX = data->writeMaterialX;
     layerOptions.assetsPath = data->assetsPath;
+    obj.originalColorSpace = data->originalColorSpace;
     GUARD(
       readObj(obj, resolvedPath, readImages), "Error reading OBJ from %s\n", resolvedPath.c_str());
     GUARD(importObj(options, obj, usd), "Error translating OBJ to USD\n");
-    GUARD(writeLayer(layerOptions, usd, layer, layerData, DEBUG_TAG, SdfFileFormat::_SetLayerData),
+    GUARD(writeLayer(layerOptions, usd, layer, layerData, fileType, DEBUG_TAG, SdfFileFormat::_SetLayerData),
           "Error writing to the USD layer\n");
     w.Stop();
     TF_DEBUG_MSG(FILE_FORMAT_OBJ, "Total time: %ld\n", static_cast<long int>(w.GetMilliseconds()));
@@ -138,7 +143,7 @@ UsdObjFileFormat::ReadFromString(SdfLayer* layer, const std::string& input) cons
     WriteLayerOptions layerOptions;
     GUARD(readObj(obj, input.c_str(), input.size()), "Error reading OBJ from string\n");
     GUARD(importObj(options, obj, usd), "Error translating OBJ to USD\n");
-    GUARD(writeLayer(layerOptions, usd, layer, layerData, DEBUG_TAG, SdfFileFormat::_SetLayerData),
+    GUARD(writeLayer(layerOptions, usd, layer, layerData, "obj", DEBUG_TAG, SdfFileFormat::_SetLayerData),
           "Error writing to the USD stage\n");
     w.Stop();
     TF_DEBUG_MSG(FILE_FORMAT_OBJ, "Total time: %ld\n", static_cast<long int>(w.GetMilliseconds()));
@@ -158,6 +163,7 @@ UsdObjFileFormat::WriteToFile(const SdfLayer& layer,
     Obj obj;
     ReadLayerOptions layerOptions;
     layerOptions.flatten = true;
+    argReadString(args, "outputColorSpace", obj.outputColorSpace, DEBUG_TAG);
     ExportObjOptions options;
     options.filename = filename;
     GUARD(readLayer(layerOptions, layer, usd, DEBUG_TAG), "Error reading USD\n");

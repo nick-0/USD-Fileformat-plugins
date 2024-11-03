@@ -13,10 +13,13 @@ governing permissions and limitations under the License.
 
 #include "common.h"
 #include "debugCodes.h"
+#include "layerRead.h"
 #include "sdfMaterialUtils.h"
 #include "sdfUtils.h"
 
 #include <pxr/usd/usdShade/tokens.h>
+
+#include <unordered_map>
 
 using namespace PXR_NS;
 
@@ -47,17 +50,15 @@ _createFallbackValue(const VtValue& value)
 }
 
 SdfPath
-_createStReader(SdfAbstractData* sdfData, const SdfPath& materialPath, const SdfPath& parentPath)
+_createStReader(SdfAbstractData* sdfData, const SdfPath& parentPath, int uvIndex)
 {
-    // Assumes the input attribute stPrimvarNameAttrName has been created before on the material
-    SdfPath stPrimvarInputPath = inputPath(materialPath, stPrimvarNameAttrName);
     return createShader(sdfData,
                         parentPath,
-                        AdobeTokens->texCoordReader,
+                        getSTTexCoordReaderToken(uvIndex),
                         AdobeTokens->UsdPrimvarReader_float2,
                         "result",
-                        {},
-                        { { "varname", stPrimvarInputPath } });
+                        { { "varname", getSTPrimvarAttrToken(uvIndex) } },
+                        {});
 }
 
 // If a texture coordinate transform is needed for the given input a transform will be created and
@@ -92,7 +93,7 @@ _createTextureReader(SdfAbstractData* sdfData,
                      const TfToken& name,
                      const Input& input,
                      const SdfPath& stResultPath,
-                     const std::string& texturePath)
+                     const SdfPath& textureConnection)
 {
     // Note, we're setting the texture path directly on this texture reader, which means the
     // path is duplicated on each texture reader of the same texture for each of the different
@@ -104,19 +105,24 @@ _createTextureReader(SdfAbstractData* sdfData,
 
     // Make sure the colorSpace is an empty VtValue if the TfToken for colorspace is empty
     VtValue colorSpace = input.colorspace.IsEmpty() ? VtValue() : VtValue(input.colorspace);
+
+    InputValues inputValues = { { "fallback", _createFallbackValue(input.value) },
+                                { "sourceColorSpace", colorSpace },
+                                { "wrapS", input.wrapS },
+                                { "wrapT", input.wrapT },
+                                { "minFilter", input.minFilter },
+                                { "magFilter", input.magFilter },
+                                { "scale", input.scale },
+                                { "bias", input.bias } };
+    InputConnections inputConnections = { { "st", stResultPath }, { "file", textureConnection } };
+
     return createShader(sdfData,
                         parentPath,
                         name,
                         AdobeTokens->UsdUVTexture,
                         input.channel.GetString(),
-                        { { "file", SdfAssetPath(texturePath) },
-                          { "fallback", _createFallbackValue(input.value) },
-                          { "sourceColorSpace", colorSpace },
-                          { "wrapS", input.wrapS },
-                          { "wrapT", input.wrapT },
-                          { "scale", input.scale },
-                          { "bias", input.bias } },
-                        { { "st", stResultPath } });
+                        inputValues,
+                        inputConnections);
 }
 
 void
@@ -125,47 +131,72 @@ _setupInput(WriteSdfContext& ctx,
             const SdfPath& parentPath,
             const TfToken& name,
             const Input& input,
-            SdfPath& stReaderResultPath,
+            std::unordered_map<int, SdfPath>& stReaderResultPathMap,
             InputValues& inputValues,
-            InputConnections& inputConnections)
+            InputConnections& inputConnections,
+            const InputToMaterialInputTypeMap& inputRemapping,
+            MaterialInputs& materialInputs)
 {
+    auto remappingIt = inputRemapping.find(name);
+    bool hasMapping = remappingIt != inputRemapping.cend();
+    if (!hasMapping) {
+        TF_CODING_ERROR("Expecting to find remapping for shader input '%s'", name.GetText());
+        return;
+    }
+    const TfToken& materialInputName = remappingIt->second.name;
+    const SdfValueTypeName& inputType = remappingIt->second.type;
+
     if (input.image >= 0) {
         if (input.isZeroTexture()) {
             inputValues.emplace_back(name.GetString(), getTextureZeroVtValue(input.channel));
+        } else if ((size_t)input.image >= ctx.usdData->images.size()) {
+            TF_CODING_ERROR("Image index %d for %s is larger than images array %zu",
+                            input.image,
+                            name.GetText(),
+                            ctx.usdData->images.size());
+            return;
         } else {
-            if ((size_t)input.image >= ctx.usdData->images.size()) {
-                TF_CODING_ERROR("Image index %d for %s is larger than images array %zu",
-                                input.image,
-                                name.GetText(),
-                                ctx.usdData->images.size());
-                return;
-            }
             std::string texturePath =
               createTexturePath(ctx.srcAssetFilename, ctx.usdData->images[input.image].uri);
+            SdfPath textureConnection = addMaterialInputTexture(
+              ctx.sdfData, materialPath, materialInputName, texturePath, materialInputs);
 
             // Create the ST reader on demand when we create the first textured input
-            if (stReaderResultPath.IsEmpty()) {
-                stReaderResultPath = _createStReader(ctx.sdfData, materialPath, parentPath);
+            SdfPath stReaderResultPath;
+            auto it = stReaderResultPathMap.find(input.uvIndex);
+            if (it == stReaderResultPathMap.end()) {
+                stReaderResultPath = _createStReader(ctx.sdfData, parentPath, input.uvIndex);
+                stReaderResultPathMap[input.uvIndex] = stReaderResultPath;
+            } else {
+                stReaderResultPath = it->second;
             }
 
-            // This creates a ST transform node if needed, otherwise the default ST result path
-            // will be returned.
+            // This creates a ST transform node if needed, otherwise the default ST
+            // result path will be returned.
             SdfPath stResultPath = _createStTransform(
               ctx.sdfData, parentPath, name.GetString(), input, stReaderResultPath);
 
-            SdfPath texResultPath =
-              _createTextureReader(ctx.sdfData, parentPath, name, input, stResultPath, texturePath);
+            SdfPath texResultPath = _createTextureReader(
+              ctx.sdfData, parentPath, name, input, stResultPath, textureConnection);
 
             inputConnections.emplace_back(name.GetString(), texResultPath);
         }
     } else if (!input.value.IsEmpty()) {
-        // Set constant value on the surface shader directly
-        inputValues.emplace_back(name.GetString(), input.value);
+        SdfPath connection = addMaterialInputValue(
+          ctx.sdfData, materialPath, materialInputName, inputType, input.value, materialInputs);
+        inputConnections.emplace_back(name.GetString(), connection);
+        const MinMaxVtValuePair* range =
+          ShaderRegistry::getInstance().getMaterialInputRange(materialInputName);
+        if (range)
+            setRangeMetadata(ctx.sdfData, connection, *range);
     }
 }
 
 void
-writeUsdPreviewSurface(WriteSdfContext& ctx, const SdfPath& materialPath, const Material& material)
+writeUsdPreviewSurface(WriteSdfContext& ctx,
+                       const SdfPath& materialPath,
+                       const Material& material,
+                       MaterialInputs& materialInputs)
 {
     SdfPath p;
 
@@ -176,18 +207,23 @@ writeUsdPreviewSurface(WriteSdfContext& ctx, const SdfPath& materialPath, const 
     TF_DEBUG_MSG(
       FILE_FORMAT_UTIL, "layer::write UsdPreviewSurface network %s\n", parentPath.GetText());
 
-    SdfPath stReaderResultPath;
     InputValues inputValues;
     InputConnections inputConnections;
+    std::unordered_map<int, SdfPath> stReaderResultPathMap;
+    const InputToMaterialInputTypeMap& remapping =
+      ShaderRegistry::getInstance().getUsdPreviewSurfaceInputRemapping();
     auto writeInput = [&](const TfToken& name, const Input& input) {
-        _setupInput(ctx,
-                    materialPath,
-                    parentPath,
-                    name,
-                    input,
-                    stReaderResultPath,
-                    inputValues,
-                    inputConnections);
+        if (!input.isEmpty())
+            _setupInput(ctx,
+                        materialPath,
+                        parentPath,
+                        name,
+                        input,
+                        stReaderResultPathMap,
+                        inputValues,
+                        inputConnections,
+                        remapping,
+                        materialInputs);
     };
 
     writeInput(AdobeTokens->useSpecularWorkflow, material.useSpecularWorkflow);
@@ -221,17 +257,23 @@ writeUsdPreviewSurface(WriteSdfContext& ctx, const SdfPath& materialPath, const 
     if (outputPaths.size() < 1) {
         TF_WARN("Failed to create surface shader output: No output paths available.");
     } else {
-        createShaderOutput( ctx.sdfData, materialPath, "surface", SdfValueTypeNames->Token, outputPaths[0]);
+        createShaderOutput(
+          ctx.sdfData, materialPath, "surface", SdfValueTypeNames->Token, outputPaths[0]);
     }
     if (outputPaths.size() < 2) {
-        TF_WARN("Failed to create displacement shader output: Insufficient output paths available.");
+        TF_WARN(
+          "Failed to create displacement shader output: Insufficient output paths available.");
     } else {
-        createShaderOutput(ctx.sdfData, materialPath, "displacement", SdfValueTypeNames->Token, outputPaths[1]);
+        createShaderOutput(
+          ctx.sdfData, materialPath, "displacement", SdfValueTypeNames->Token, outputPaths[1]);
     }
 }
 
 void
-writeAsmMaterial(WriteSdfContext& ctx, const SdfPath& materialPath, const Material& material)
+writeAsmMaterial(WriteSdfContext& ctx,
+                 const SdfPath& materialPath,
+                 const Material& material,
+                 MaterialInputs& materialInputs)
 {
     SdfPath p;
 
@@ -241,18 +283,22 @@ writeAsmMaterial(WriteSdfContext& ctx, const SdfPath& materialPath, const Materi
 
     TF_DEBUG_MSG(FILE_FORMAT_UTIL, "layer::write ASM network %s\n", parentPath.GetText());
 
-    SdfPath stReaderResultPath;
     InputValues inputValues;
     InputConnections inputConnections;
+    std::unordered_map<int, SdfPath> stReaderResultPathMap;
+    const InputToMaterialInputTypeMap& remapping =
+      ShaderRegistry::getInstance().getAsmInputRemapping();
     auto writeInput = [&](const TfToken& name, const Input& input) {
         _setupInput(ctx,
                     materialPath,
                     parentPath,
                     name,
                     input,
-                    stReaderResultPath,
+                    stReaderResultPathMap,
                     inputValues,
-                    inputConnections);
+                    inputConnections,
+                    remapping,
+                    materialInputs);
     };
 
     // Currently unused inputs
@@ -262,21 +308,23 @@ writeAsmMaterial(WriteSdfContext& ctx, const SdfPath& materialPath, const Materi
     writeInput(AdobeTokens->roughness, material.roughness);
     writeInput(AdobeTokens->metallic, material.metallic);
     writeInput(AdobeTokens->opacity, material.opacity);
-    // Note, ASM does not support an opacityThreshold. But without storing it here, the information
-    // is lost and can't be round tripped. So we store it, even though we know it won't affect the
-    // result of the material
+
+    // Note, ASM does not support an opacityThreshold. But without storing it here, the
+    // information is lost and can't be round tripped. So we store it, even though we know it
+    // won't affect the result of the material
     writeInput(AdobeTokens->opacityThreshold, material.opacityThreshold);
     writeInput(AdobeTokens->specularLevel, material.specularLevel);
     // XXX should this be gated by material.useSpecularWorkflow?
     writeInput(AdobeTokens->specularEdgeColor, material.specularColor);
     writeInput(AdobeTokens->normal, material.normal);
-    // normalScale (the scale is part of the normal `scale` or `value`)
+    writeInput(AdobeTokens->normalScale, material.normalScale);
     // combineNormalAndHeight = false (flag) (no source info)
     writeInput(AdobeTokens->height, material.displacement);
     // heightScale (no source info)
     // heightLevel (no source info)
     writeInput(AdobeTokens->anisotropyLevel, material.anisotropyLevel);
     writeInput(AdobeTokens->anisotropyAngle, material.anisotropyAngle);
+
     // Turn on emission if we have a valid input
     if (!material.emissiveColor.isEmpty()) {
         // The intensity is part of the emissive `scale` or `value` of the emissiveColor input
@@ -310,7 +358,7 @@ writeAsmMaterial(WriteSdfContext& ctx, const SdfPath& materialPath, const Materi
     writeInput(AdobeTokens->coatNormal, material.clearcoatNormal);
     // coatNormalScale (the scale is part of the coatNormal `scale` or `value`)
     writeInput(AdobeTokens->ambientOcclusion, material.occlusion);
-    writeInput(AdobeTokens->volumeThickness, material.thickness);
+    writeInput(AdobeTokens->volumeThickness, material.volumeThickness);
     // volumeThicknessScale (the scale is part of the volumeThickness `scale` or `value`)
 
     // Create Adobe Standard Material shader
@@ -324,6 +372,15 @@ writeAsmMaterial(WriteSdfContext& ctx, const SdfPath& materialPath, const Materi
     createShaderOutput(
       ctx.sdfData, materialPath, "adobe:surface", SdfValueTypeNames->Token, outputPath);
 
+    if (material.isUnlit) {
+        SdfPath p = createAttributeSpec(ctx.sdfData,
+                                        parentPath.AppendChild(AdobeTokens->ASM),
+                                        AdobeTokens->unlit,
+                                        SdfValueTypeNames->Bool);
+        setAttributeMetadata(ctx.sdfData, p, SdfFieldKeys->Custom, VtValue(true));
+        setAttributeDefaultValue(ctx.sdfData, p, true);
+    }
+
     if (material.clearcoatModelsTransmissionTint) {
         // Author a custom attribute to leave an indicator where the clearcoat came from
         SdfPath p = createAttributeSpec(ctx.sdfData,
@@ -334,5 +391,4 @@ writeAsmMaterial(WriteSdfContext& ctx, const SdfPath& materialPath, const Materi
         setAttributeDefaultValue(ctx.sdfData, p, true);
     }
 }
-
 }

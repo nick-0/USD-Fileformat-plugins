@@ -47,6 +47,17 @@ struct USDFFUTILS_API TimeValues
 };
 
 /// \ingroup utils_nodes
+/// \brief A set of transforms representing how the node moves over time
+struct USDFFUTILS_API NodeAnimation
+{
+    // XXX the single translation is GfVec3d, but the translations is GfVec3f. That should be
+    // GfVec3d as well
+    TimeValues<PXR_NS::GfVec3f> translations;
+    TimeValues<PXR_NS::GfQuatf> rotations;
+    TimeValues<PXR_NS::GfVec3f> scales;
+};
+
+/// \ingroup utils_nodes
 /// \brief A cache for Xform data, including TRS properties, transform matrix, and associated child
 /// caches like other nodes, meshes, cameras, etc. A collection of these will drive how layerWrite
 /// will author Xform prims and its children prims.
@@ -62,17 +73,17 @@ struct USDFFUTILS_API Node
     PXR_NS::GfVec3d translation = PXR_NS::GfVec3d(0.0, 0.0, 0.0);
     PXR_NS::GfQuatf rotation = PXR_NS::GfQuatf(0.0f, 0.0f, 0.0f, 0.0f);
     PXR_NS::GfVec3f scale = PXR_NS::GfVec3f(1.0f, 1.0f, 1.0f);
-    // XXX the single translation is GfVec3d, but the translations is GfVec3f. That should be
-    // GfVec3d as well
-    TimeValues<PXR_NS::GfVec3f> translations;
-    TimeValues<PXR_NS::GfQuatf> rotations;
-    TimeValues<PXR_NS::GfVec3f> scales;
+    // One NodeAnimation imported per animation track.
+    // During the import/export process, tracks are separated.
+    // Before converting UsdData to USD, tracks will be joined
+    std::vector<NodeAnimation> animations;
     int parent = -1;
     int camera = -1;
     int ngp = -1;
+    int light = -1;
     std::vector<int> nurbs = {};
     std::vector<int> staticMeshes = {};
-    std::unordered_map<int, std::vector<int>> skinnedMeshes = {};
+    std::vector<std::pair<int, std::vector<int>>> skinnedMeshes = {}; // Only used during export
     std::vector<int> children = {};
 
     std::string path;
@@ -84,15 +95,18 @@ struct USDFFUTILS_API Node
 struct USDFFUTILS_API Camera
 {
     std::string name;
-    PXR_NS::GfCamera camera;
     PXR_NS::GfCamera::Projection projection;
     float f;
-    float fov;
-    float aspectRatio;
     float horizontalAperture;
     float verticalAperture;
     float nearZ;
     float farZ;
+    float fStop;
+    float focusDistance;
+    // Members below are used for importing/exporting cameras from fbx and gltf files.
+    PXR_NS::GfCamera camera;
+    float fov;
+    float aspectRatio;
 };
 
 /// \ingroup utils_geometry
@@ -122,13 +136,18 @@ struct USDFFUTILS_API Mesh
     PXR_NS::VtIntArray faces;
     PXR_NS::VtIntArray indices;
     PXR_NS::VtVec3fArray points;
+    PXR_NS::VtFloatArray pointWidths;
     Primvar<PXR_NS::GfVec3f> normals;
     // XXX tangents in USD are usually GfVec3f and are only supported by Hermite curves. Something
     // is not quite right
     Primvar<PXR_NS::GfVec4f> tangents;
     Primvar<PXR_NS::GfVec2f> uvs;
+    std::vector<Primvar<PXR_NS::GfVec2f>> extraUVSets;
     std::vector<Primvar<PXR_NS::GfVec3f>> colors;
     std::vector<Primvar<float>> opacities;
+    std::vector<Primvar<float>> pointExtraWidths;
+    std::vector<Primvar<float>> pointSHCoeffs;
+    Primvar<PXR_NS::GfQuatf> pointRotations;
     PXR_NS::VtIntArray joints;
     PXR_NS::VtFloatArray weights;
     int material = -1;
@@ -136,11 +155,12 @@ struct USDFFUTILS_API Mesh
     bool doubleSided = false;
     bool instanceable = false;
     bool asPoints = false;
-    float pointWidth = 0.01f;
+    bool asGsplats = false;
     bool isRigid = false;
     int influenceCount = 1;
     PXR_NS::GfMatrix4d geomBindTransform = PXR_NS::GfMatrix4d(1.0);
     PXR_NS::TfToken subdivisionScheme = PXR_NS::UsdGeomTokens->none;
+    Primvar<PXR_NS::GfVec3f> clippingBox;
 };
 
 /// \ingroup utils_geometry
@@ -190,11 +210,12 @@ struct USDFFUTILS_API NgpData
 };
 
 /// \ingroup utils_skeletons
-struct USDFFUTILS_API Animation
+struct USDFFUTILS_API SkeletonAnimation
 {
-    std::string name;
-    PXR_NS::VtArray<PXR_NS::TfToken> joints;
     std::vector<float> times;
+    // These transforms are orgnized as a vector of size times.size()
+    // Each element of the vector is a set of transforms at that timepoint.
+    // The array representing this is an array of size Skeleton::animatedJoints.size()
     std::vector<PXR_NS::VtArray<PXR_NS::GfQuatf>> rotations;
     std::vector<PXR_NS::VtArray<PXR_NS::GfVec3f>> translations;
     std::vector<PXR_NS::VtArray<PXR_NS::GfVec3h>> scales;
@@ -205,15 +226,32 @@ struct USDFFUTILS_API Animation
 struct USDFFUTILS_API Skeleton
 {
     std::string name;
-    std::vector<int> parents;
-    std::vector<int> targets;
+    int parent = -1;
+    std::vector<int> jointParents;
+    std::vector<int> meshSkinningTargets;
     PXR_NS::VtTokenArray joints;
     PXR_NS::VtTokenArray jointNames;
     PXR_NS::VtMatrix4dArray restTransforms;
     PXR_NS::VtArray<PXR_NS::GfMatrix4f> inverseBindMatricesFloat; // used for import
-    PXR_NS::VtMatrix4dArray inverseBindTransforms;             // used for export
+    PXR_NS::VtMatrix4dArray inverseBindTransforms;                // used for export
     PXR_NS::VtMatrix4dArray bindTransforms;
-    PXR_NS::VtArray<int> animations;
+    // One SkeletonAnimation imported per animation track.
+    // During the import/export process, tracks are separated.
+    // Before converting UsdData to USD, tracks will be joined
+    std::vector<SkeletonAnimation> skeletonAnimations;
+    // We share one set of animatedJoints across all tracks so that it is easy to join & split
+    // tracks
+    PXR_NS::VtTokenArray animatedJoints; // could be a subset of joints
+};
+
+/// \ingroup utils_layer
+struct USDFFUTILS_API AnimationTrack
+{
+    std::string name;
+    float minTime = std::numeric_limits<int>::max();
+    float maxTime = 0;
+    float offsetToJoinedTimeline = 0;
+    bool hasTimepoints = false;
 };
 
 enum USDFFUTILS_API ImageFormat
@@ -241,6 +279,29 @@ getFormat(const std::string& extension);
 USDFFUTILS_API std::string
 getFormatExtension(ImageFormat format);
 
+enum USDFFUTILS_API LightType
+{
+    Disk,
+    Rectangle,
+    Sphere,
+    Environment,
+    Sun,
+};
+
+struct USDFFUTILS_API Light
+{
+    std::string name;
+    LightType type;
+    PXR_NS::GfVec3f color;
+    PXR_NS::GfVec2f length; // Rect light dimensions.
+    float intensity;
+    float radius;
+    float coneAngle;    // Control the light spread for disk light.
+    float coneFalloff;  // Control the cutoff for disk light.
+    float angle;        // Angular size of distant/sun light.
+    ImageAsset texture; // IBL texture.
+};
+
 /// \ingroup utils_materials
 /// \brief Material Input data
 struct USDFFUTILS_API Input
@@ -251,6 +312,8 @@ struct USDFFUTILS_API Input
     PXR_NS::TfToken channel;
     PXR_NS::TfToken wrapS;
     PXR_NS::TfToken wrapT;
+    PXR_NS::TfToken minFilter;
+    PXR_NS::TfToken magFilter;
     PXR_NS::TfToken colorspace;
     PXR_NS::VtValue scale;
     PXR_NS::VtValue bias;
@@ -276,12 +339,18 @@ struct USDFFUTILS_API Material
     // not want to export clearcoat to GLTF again.
     bool clearcoatModelsTransmissionTint = false;
 
+    // Since USD doesn't support glTF unlit materials, we convert them on import to emissive. We
+    // keep this information, and store it as metadata in the file, so we can convert it back on
+    // export
+    bool isUnlit = false;
+
     Input useSpecularWorkflow;
     Input diffuseColor;
     Input emissiveColor;
     Input specularLevel;
     Input specularColor;
     Input normal;
+    Input normalScale;
     Input metallic;
     Input roughness;
     Input clearcoat;
@@ -300,7 +369,7 @@ struct USDFFUTILS_API Material
     Input occlusion;
     Input ior;
     Input transmission;
-    Input thickness;
+    Input volumeThickness;
     Input absorptionDistance;
     Input absorptionColor;
     Input scatteringDistance;
@@ -323,8 +392,7 @@ struct USDFFUTILS_API UsdData
     std::string doc;
     PXR_NS::VtDictionary metadata;
     bool hasAnimations = false;
-    float minTime = std::numeric_limits<int>::max();
-    float maxTime = 0;
+    std::vector<AnimationTrack> animationTracks;
     double timeCodesPerSecond = 24;
 
     std::vector<int> rootNodes;
@@ -333,9 +401,9 @@ struct USDFFUTILS_API UsdData
     std::vector<Camera> cameras;
     std::vector<NurbData> nurbs;
     std::vector<ImageAsset> images;
+    std::vector<Light> lights;
     std::vector<Material> materials;
     std::vector<Skeleton> skeletons;
-    std::vector<Animation> animations;
     std::vector<NgpData> ngps;
 
     std::pair<int, Node&> addNode(int parent);
@@ -344,11 +412,14 @@ struct USDFFUTILS_API UsdData
     std::pair<int, Subset&> addSubset(int meshIndex);
     std::pair<int, Primvar<PXR_NS::GfVec3f>&> addColorSet(int meshIndex);
     std::pair<int, Primvar<float>&> addOpacitySet(int meshIndex);
+    std::pair<int, Primvar<float>&> addExtraPointWidthSet(int meshIndex);
+    std::pair<int, Primvar<float>&> addPointSHCoeffSet(int meshIndex);
     std::pair<int, Material&> addMaterial();
+    void reserveImages(size_t count);
     std::pair<int, ImageAsset&> addImage();
+    std::pair<int, Light&> addLight();
     std::pair<int, Camera&> addCamera();
     std::pair<int, Skeleton&> addSkeleton();
-    std::pair<int, Animation&> addAnimation();
     std::pair<int, NgpData&> addNgp();
 };
 
@@ -373,8 +444,8 @@ getInputValue(const Input& input, T* value)
     } else if constexpr (std::is_same_v<T, PXR_NS::GfVec2f>) {
         *value = PXR_NS::GfVec2f(scale[0], scale[1]) * v + PXR_NS::GfVec2f(bias[0], bias[1]);
     } else if constexpr (std::is_same_v<T, PXR_NS::GfVec3f>) {
-        *value =
-          PXR_NS::GfVec3f(scale[0], scale[1], scale[2]) * v + PXR_NS::GfVec3f(bias[0], bias[1], bias[2]);
+        *value = PXR_NS::GfVec3f(scale[0], scale[1], scale[2]) * v +
+                 PXR_NS::GfVec3f(bias[0], bias[1], bias[2]);
     } else if constexpr (std::is_same_v<T, PXR_NS::GfVec4f>) {
         *value = scale * v + bias;
     } else {
@@ -407,4 +478,29 @@ printSkeleton(const std::string& header,
 USDFFUTILS_API void
 uniquifyNames(UsdData& data);
 
+class USDFFUTILS_API UniqueNameEnforcer
+{
+    std::unordered_map<std::string, int> namesMap;
+
+  public:
+    void enforceUniqueness(std::string& name);
+};
+
+// Currently used by the FBX and OBJ plugins whose color space data may either be linear
+// or sRGB.  This checks if the outputColorSpace if specifically set, if not, it will
+// check the USD metatadata for the original color space.
+USDFFUTILS_API bool
+shouldConvertToSRGB(const UsdData& usd, const std::string& outputColorSpace);
+
+/**
+ * Remove normals of length 0 from the mesh if those normals are part of vertices of degenerate
+ * triangles.
+ *
+ * A warning is issued if 0 length normals are encountered which are part of non-degenerate
+ * triangles or non-triangle faces, but those normals are not removed.
+ *
+ * @param mesh The mesh to be modified. Note that this mesh is directly modified in place.
+ */
+USDFFUTILS_API void
+trimDegenerateNormals(Mesh& mesh);
 }
