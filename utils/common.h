@@ -16,6 +16,7 @@ governing permissions and limitations under the License.
 #include <pxr/base/tf/diagnostic.h>
 #include <pxr/usd/pcp/dynamicFileFormatContext.h>
 #include <pxr/usd/sdf/fileFormat.h>
+#include <cctype> // for std::isspace
 
 /// We defined these tokens to skip linking to usd imaging, which is heavy.
 // XXX Split this list into categories for easier maintenance
